@@ -19,7 +19,8 @@ geometry, never from how the text happened to be emitted.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 Box = tuple[float, float, float, float]
 

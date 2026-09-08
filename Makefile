@@ -1,4 +1,4 @@
-.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 docker-build docker-up
+.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 docker-build docker-up
 
 install:
 	uv pip install --system -e .
@@ -68,3 +68,22 @@ figure:
 	python scripts/make_pipeline_figure.py --corpus $(CORPUS) --profiles medium heavy
 
 phase1: corpus ablation figure
+
+# ---------------------------------------------------------------- phase 2
+
+EXTRACTOR ?= rules
+PROFILE ?= clean
+# 'gold' feeds the renderer's ground-truth text: a perfect-OCR CEILING, not an
+# end-to-end result. Switch to 'engine' once an OCR engine is installed.
+OCR_SOURCE ?= gold
+
+# Run one extractor over the corpus and score it with the Phase 0 harness.
+extract:
+	python scripts/run_extraction.py 		--corpus $(CORPUS) --extractor $(EXTRACTOR) 		--ocr-source $(OCR_SOURCE) --profile $(PROFILE) 		--out reports/phase2/$(EXTRACTOR)
+	python -m invoice_extract.eval.harness 		--gold reports/phase2/$(EXTRACTOR)/gold.jsonl 		--pred reports/phase2/$(EXTRACTOR)/pred.jsonl
+
+# The Phase 2 headline table. Add vlm:* extractors on a GPU box.
+extract-ablation:
+	python scripts/run_extraction_ablation.py 		--corpus $(CORPUS) --extractors null rules 		--ocr-source $(OCR_SOURCE) --out reports/phase2_ablation
+
+phase2: extract-ablation

@@ -46,13 +46,13 @@ from invoice_extract.ocr.base import (  # noqa: E402
     OcrWord,
     get_engine,
 )
-from invoice_extract.reading_order import reading_order_text  # noqa: E402
 from invoice_extract.preprocess.pipeline import (  # noqa: E402
     ABLATION_CONFIGS,
     VARIANT_CONFIGS,
     Pipeline,
     get_config,
 )
+from invoice_extract.reading_order import reading_order_text  # noqa: E402
 
 
 def load_manifest(corpus: Path) -> list[dict]:

@@ -121,8 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     gold_lines: list[str] = []
     pred_lines: list[str] = []
     stats = {
-        "n": 0, "parse_failures": 0, "schema_failures": 0,
-        "arithmetic_flags": 0, "total_ms": 0.0,
+        "n": 0,
+        "parse_failures": 0,
+        "schema_failures": 0,
+        "arithmetic_flags": 0,
+        "total_ms": 0.0,
     }
     started = time.time()
 
@@ -147,9 +150,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.ocr_source == "gold" and hasattr(extractor, "predict_from_text"):
                 raw = extractor.predict_from_text(gold_text_for(args.corpus, row))
             elif args.extractor.startswith("vlm") and args.ocr_source == "gold":
-                raw = extractor.generate(
-                    [image_path], ocr_text=gold_text_for(args.corpus, row)
-                ).parsed or {}
+                raw = (
+                    extractor.generate(
+                        [image_path], ocr_text=gold_text_for(args.corpus, row)
+                    ).parsed
+                    or {}
+                )
             else:
                 raw = extractor.predict([image_path])
         except Exception as exc:  # a model failure is a data point, not a crash
@@ -163,7 +169,9 @@ def main(argv: list[str] | None = None) -> int:
         pred_doc, consistency = finalize(
             raw,
             doc_id=doc_id,
-            source=gold_doc.get("source", {"dataset": "other", "original_id": doc_id, "split": "test"}),
+            source=gold_doc.get(
+                "source", {"dataset": "other", "original_id": doc_id, "split": "test"}
+            ),
             pages=pages,
             day_first=args.day_first,
         )
@@ -206,13 +214,19 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
     if stats["parse_failures"]:
-        print(f"WARNING: {stats['parse_failures']} document(s) produced no parseable output",
-              file=sys.stderr)
+        print(
+            f"WARNING: {stats['parse_failures']} document(s) produced no parseable output",
+            file=sys.stderr,
+        )
     if stats["schema_failures"]:
-        print(f"WARNING: {stats['schema_failures']} prediction(s) failed schema validation",
-              file=sys.stderr)
-    print(f"\nScore with:\n  python -m invoice_extract.eval.harness "
-          f"--gold {args.out}/gold.jsonl --pred {args.out}/pred.jsonl")
+        print(
+            f"WARNING: {stats['schema_failures']} prediction(s) failed schema validation",
+            file=sys.stderr,
+        )
+    print(
+        f"\nScore with:\n  python -m invoice_extract.eval.harness "
+        f"--gold {args.out}/gold.jsonl --pred {args.out}/pred.jsonl"
+    )
     return 0
 
 

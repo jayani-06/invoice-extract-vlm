@@ -94,7 +94,16 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "type": {
                         "type": "string",
-                        "enum": ["CGST", "SGST", "IGST", "CESS", "VAT", "GST", "SALES_TAX", "OTHER"],
+                        "enum": [
+                            "CGST",
+                            "SGST",
+                            "IGST",
+                            "CESS",
+                            "VAT",
+                            "GST",
+                            "SALES_TAX",
+                            "OTHER",
+                        ],
                     },
                     "rate": {"type": ["number", "null"]},
                     "amount": {"type": "number"},
@@ -106,8 +115,14 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
             "properties": {
                 key: {"type": ["number", "null"]}
-                for key in ("subtotal", "discount_total", "tax_total", "shipping",
-                            "round_off", "grand_total")
+                for key in (
+                    "subtotal",
+                    "discount_total",
+                    "tax_total",
+                    "shipping",
+                    "round_off",
+                    "grand_total",
+                )
             }
             | {"amount_in_words": {"type": ["string", "null"]}},
         },
@@ -116,7 +131,14 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "additionalProperties": False,
             "properties": {
                 key: {"type": ["string", "null"]}
-                for key in ("bank_name", "account_number", "ifsc_or_swift", "upi_id", "mode", "terms")
+                for key in (
+                    "bank_name",
+                    "account_number",
+                    "ifsc_or_swift",
+                    "upi_id",
+                    "mode",
+                    "terms",
+                )
             },
         },
     },
@@ -137,7 +159,7 @@ TARGET_SKELETON = """{
     {"line_no": 1, "description": null, "hsn_sac_code": null, "quantity": null,
      "unit_price": null, "tax_rate": null, "tax_amount": null, "line_total": null}
   ],
-  "tax_lines": [{"type": "CGST", "rate": null, "amount": null}],
+  "tax_lines": [{"type": "CGST", "rate": 9, "amount": 123.45}],
   "totals": {
     "subtotal": null, "discount_total": null, "tax_total": null,
     "shipping": null, "round_off": null, "grand_total": null
@@ -159,6 +181,9 @@ Rules:
 - Amounts and quantities must be JSON numbers, not strings.
 - line_items must contain one entry per row of the line-item table.
 - tax_lines must contain one entry per tax component shown (CGST, SGST, IGST, ...).
+  Every tax_lines entry needs a numeric "amount"; the values in the template
+  below are only there to show the shape. Use an empty list if the document
+  shows no tax at all.
 - Do not invent rows, taxes, or parties that are not on the document.
 
 Template:

@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any
 
 from invoice_extract.models.postprocess import (
-    GSTIN_RE,
     parse_amount,
     parse_quantity,
     parse_rate,
@@ -110,9 +109,7 @@ def _value_after_label(line: str, label_pattern: str) -> str | None:
     last branch; without the name, any capturing group inside a label pattern
     would shift the value's index.
     """
-    match = re.search(
-        rf"(?:{label_pattern})\s*[:\-]?\s*(?P<value>.+)$", line, re.IGNORECASE
-    )
+    match = re.search(rf"(?:{label_pattern})\s*[:\-]?\s*(?P<value>.+)$", line, re.IGNORECASE)
     if not match:
         return None
     value = match.group("value").strip(" :-\t")
@@ -238,8 +235,11 @@ class RuleBasedExtractor:
 
     def _meta(self, lines: list[str]) -> dict[str, Any]:
         meta: dict[str, Any] = {
-            "invoice_number": None, "invoice_date": None,
-            "due_date": None, "po_number": None, "payment_terms": None,
+            "invoice_number": None,
+            "invoice_date": None,
+            "due_date": None,
+            "po_number": None,
+            "payment_terms": None,
         }
         for line in lines:
             for pattern, field_name in _META_LABELS:
@@ -297,13 +297,15 @@ class RuleBasedExtractor:
         """
         start, end = 0, len(lines)
         for i, line in enumerate(lines):
-            if re.search(r"\bdescription\b|\bparticulars\b|\bitem\b", line, re.IGNORECASE) and re.search(
-                r"\bamount\b|\bqty\b|\bquantity\b|\brate\b", line, re.IGNORECASE
-            ):
+            if re.search(
+                r"\bdescription\b|\bparticulars\b|\bitem\b", line, re.IGNORECASE
+            ) and re.search(r"\bamount\b|\bqty\b|\bquantity\b|\brate\b", line, re.IGNORECASE):
                 start = i + 1
                 break
         for i in range(start, len(lines)):
-            if re.search(r"sub\s*-?\s*total|grand\s*total|taxable\s*value", lines[i], re.IGNORECASE):
+            if re.search(
+                r"sub\s*-?\s*total|grand\s*total|taxable\s*value", lines[i], re.IGNORECASE
+            ):
                 end = i
                 break
 

@@ -31,11 +31,23 @@ from typing import Any
 # Ordered by specificity. Indian invoices are day-first, which is also the
 # ISO-adjacent reading, so ambiguous d/m/Y is resolved day-first by default.
 _DATE_FORMATS = [
-    "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d",
-    "%d-%m-%Y", "%d/%m/%Y", "%d.%m.%Y",
-    "%d-%m-%y", "%d/%m/%y", "%d.%m.%y",
-    "%d-%b-%Y", "%d %b %Y", "%d-%B-%Y", "%d %B %Y",
-    "%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y",
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%d-%m-%Y",
+    "%d/%m/%Y",
+    "%d.%m.%Y",
+    "%d-%m-%y",
+    "%d/%m/%y",
+    "%d.%m.%y",
+    "%d-%b-%Y",
+    "%d %b %Y",
+    "%d-%B-%Y",
+    "%d %B %Y",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%b %d %Y",
+    "%B %d %Y",
     "%Y%m%d",
 ]
 _MONTH_FIRST_FORMATS = ["%m-%d-%Y", "%m/%d/%Y", "%m-%d-%y", "%m/%d/%y"]
@@ -85,8 +97,14 @@ _AMOUNT_CHARS = re.compile(r"[^0-9.,\-()]")
 
 CURRENCY_BY_SYMBOL = {"₹": "INR", "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
 CURRENCY_BY_WORD = {
-    "rs": "INR", "rs.": "INR", "inr": "INR", "rupees": "INR",
-    "usd": "USD", "eur": "EUR", "gbp": "GBP", "jpy": "JPY",
+    "rs": "INR",
+    "rs.": "INR",
+    "inr": "INR",
+    "rupees": "INR",
+    "usd": "USD",
+    "eur": "EUR",
+    "gbp": "GBP",
+    "jpy": "JPY",
 }
 
 
@@ -130,7 +148,7 @@ def parse_amount(value: Any) -> float | None:
     elif last_comma >= 0:
         # A lone comma is a decimal point only when it is not in a thousands
         # position: "1,50" is 1.5, but "1,500" is 1500.
-        tail = text[last_comma + 1:]
+        tail = text[last_comma + 1 :]
         text = text.replace(",", "." if len(tail) != 3 else "")
 
     try:
@@ -289,13 +307,22 @@ def check_arithmetic(doc: dict[str, Any], tolerance: float = 0.02) -> Consistenc
             + (totals.get("round_off") or 0.0)
         )
         if not close(expected, grand):
-            problems.append(f"subtotal+tax-discount+shipping+round_off={expected:.2f} != grand_total={grand:.2f}")
+            problems.append(
+                f"subtotal+tax-discount+shipping+round_off={expected:.2f} != grand_total={grand:.2f}"
+            )
 
     for i, li in enumerate(line_items):
         qty, price, total = li.get("quantity"), li.get("unit_price"), li.get("line_total")
-        if qty is not None and price is not None and total is not None:
-            if not close(qty * price, total - (li.get("tax_amount") or 0.0)) and not close(qty * price, total):
-                problems.append(f"line_items[{i}]: quantity*unit_price={qty * price:.2f} != line_total={total:.2f}")
+        if (
+            qty is not None
+            and price is not None
+            and total is not None
+            and not close(qty * price, total - (li.get("tax_amount") or 0.0))
+            and not close(qty * price, total)
+        ):
+            problems.append(
+                f"line_items[{i}]: quantity*unit_price={qty * price:.2f} != line_total={total:.2f}"
+            )
 
     return ConsistencyReport(problems)
 
@@ -312,7 +339,12 @@ _LINE_ITEM_NUMERIC = {
     "line_total": parse_amount,
 }
 _TOTALS_KEYS = [
-    "subtotal", "discount_total", "tax_total", "shipping", "round_off", "grand_total",
+    "subtotal",
+    "discount_total",
+    "tax_total",
+    "shipping",
+    "round_off",
+    "grand_total",
 ]
 _VALID_TAX_TYPES = {"CGST", "SGST", "IGST", "CESS", "VAT", "GST", "SALES_TAX", "OTHER"}
 

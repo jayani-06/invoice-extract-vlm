@@ -28,7 +28,7 @@ from invoice_extract.models.prompting import (
 
 INSTALL_HINT = (
     "VLM inference needs the optional 'vlm' extra:\n"
-    "  pip install -e \".[vlm]\"\n"
+    '  pip install -e ".[vlm]"\n'
     "On a T4 (Colab/Kaggle) this pulls torch, transformers, accelerate and "
     "bitsandbytes. See configs/compute_plan.md for the memory budget."
 )
@@ -54,23 +54,34 @@ class ModelPreset:
 #: sanity-check any addition here before anything is downloaded.
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "qwen2-vl-2b": ModelPreset(
-        "Qwen/Qwen2-VL-2B-Instruct", 2.0, four_bit=False,
+        "Qwen/Qwen2-VL-2B-Instruct",
+        2.0,
+        four_bit=False,
         notes="Recommended first baseline per configs/compute_plan.md; fp16 fits a T4.",
     ),
     "qwen2.5-vl-3b": ModelPreset(
-        "Qwen/Qwen2.5-VL-3B-Instruct", 3.0, four_bit=True,
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+        3.0,
+        four_bit=True,
         notes="Newer generation, stronger document grounding; 4-bit at 3B per the plan.",
     ),
     "qwen2-vl-7b": ModelPreset(
-        "Qwen/Qwen2-VL-7B-Instruct", 7.0, four_bit=True,
+        "Qwen/Qwen2-VL-7B-Instruct",
+        7.0,
+        four_bit=True,
         notes="Try only if the 2B ceiling is clearly the limiter; 2-3x slower per document.",
     ),
     "internvl2-2b": ModelPreset(
-        "OpenGVLab/InternVL2-2B", 2.0, four_bit=False,
+        "OpenGVLab/InternVL2-2B",
+        2.0,
+        four_bit=False,
         notes="Alternative to Qwen at the same size; useful as a second data point.",
     ),
     "florence-2-large": ModelPreset(
-        "microsoft/Florence-2-large", 0.77, four_bit=False, max_new_tokens=1024,
+        "microsoft/Florence-2-large",
+        0.77,
+        four_bit=False,
+        max_new_tokens=1024,
         notes="Very light, strong OCR grounding, weaker instruction following.",
     ),
 }
@@ -232,7 +243,9 @@ class VlmExtractor:
         confidence, mean_logprob = self._token_confidence(output, generated, processor)
         return response, confidence, mean_logprob
 
-    def _token_confidence(self, output, generated, processor) -> tuple[dict[str, float], float | None]:
+    def _token_confidence(
+        self, output, generated, processor
+    ) -> tuple[dict[str, float], float | None]:
         """Per-field confidence from generation log-probabilities.
 
         Confidence is averaged over the tokens that produced each JSON *value*,
