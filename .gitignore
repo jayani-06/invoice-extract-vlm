@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Data (raw/processed datasets are large & licensed separately — never commit)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+*.zip
+*.tar.gz
+
+# Model weights / checkpoints
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Phase 1: generated image corpus and ablation reports are reproducible
+# from canonical JSON via `make corpus` / `make ablation`, so they are not tracked.
+reports/
+data/processed/*/images/
+data/processed/*/ocr_gold/
+data/processed/*/manifest.jsonl

@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0.0",
+  "doc_id": "gst_synth_0001",
+  "source": {
+    "dataset": "gst_in_synthetic",
+    "original_id": "synthetic_batch1_0001.png",
+    "split": "train",
+    "license": "internal-synthetic"
+  },
+  "language": "en",
+  "currency": "INR",
+  "document_type": "invoice",
+  "pages": [
+    { "page_index": 0, "image_path": "data/processed/gst_in_synthetic/images/0001.png", "width": 1654, "height": 2339, "dpi": 200 }
+  ],
+  "parties": {
+    "vendor": {
+      "name": "Sundar Traders Pvt Ltd",
+      "address": "12 MG Road, Bengaluru, Karnataka 560001",
+      "gstin": "29ABCDE1234F1Z5",
+      "phone": "+91-80-12345678",
+      "email": "billing@sundartraders.example"
+    },
+    "buyer": {
+      "name": "Ramesh Enterprises",
+      "address": "45 Anna Salai, Chennai, Tamil Nadu 600002",
+      "gstin": "33PQRSX5678L1Z2",
+      "phone": null,
+      "email": null
+    }
+  },
+  "invoice_meta": {
+    "invoice_number": "INV-2026-0142",
+    "invoice_date": "2026-08-14",
+    "due_date": "2026-09-13",
+    "po_number": "PO-9981",
+    "payment_terms": "Net 30"
+  },
+  "line_items": [
+    {
+      "line_no": 1,
+      "description": "A4 Copier Paper (500 sheets)",
+      "hsn_sac_code": "4802",
+      "quantity": 20,
+      "unit": "ream",
+      "unit_price": 250.0,
+      "discount": 0.0,
+      "tax_rate": 18.0,
+      "tax_amount": 900.0,
+      "line_total": 5900.0
+    },
+    {
+      "line_no": 2,
+      "description": "Ballpoint Pens (box of 50)",
+      "hsn_sac_code": "9608",
+      "quantity": 5,
+      "unit": "box",
+      "unit_price": 300.0,
+      "discount": 50.0,
+      "tax_rate": 18.0,
+      "tax_amount": 261.0,
+      "line_total": 1711.0
+    }
+  ],
+  "tax_lines": [
+    { "type": "CGST", "rate": 9.0, "amount": 580.5 },
+    { "type": "SGST", "rate": 9.0, "amount": 580.5 }
+  ],
+  "totals": {
+    "subtotal": 7000.0,
+    "discount_total": 50.0,
+    "tax_total": 1161.0,
+    "shipping": 0.0,
+    "round_off": -0.5,
+    "grand_total": 8110.5,
+    "amount_in_words": "Eight Thousand One Hundred Ten Rupees and Fifty Paise Only"
+  },
+  "payment_info": {
+    "bank_name": "HDFC Bank",
+    "account_number": "50100123456789",
+    "ifsc_or_swift": "HDFC0001234",
+    "upi_id": "sundartraders@hdfcbank",
+    "mode": null,
+    "terms": "Net 30"
+  },
+  "grounding": [
+    { "field_path": "invoice_meta.invoice_number", "page_index": 0, "bbox": [1180, 140, 1480, 175], "confidence": 0.98 },
+    { "field_path": "totals.grand_total", "page_index": 0, "bbox": [1220, 2050, 1480, 2090], "confidence": 0.95 }
+  ],
+  "annotator": {
+    "annotated_by": "seed-example",
+    "verified": true,
+    "notes": "Hand-written example used as a schema fixture, not real data."
+  }
+}

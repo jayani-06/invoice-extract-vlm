@@ -1,0 +1,50 @@
+# Skeleton compose stack. Only `app` is needed for schema/dataset/eval work.
+# `labelstudio` and `minio` are optional (annotation UI + object storage for
+# dataset images) and run only when explicitly requested via --profile.
+
+services:
+  app:
+    build: .
+    image: invoice-extract-vlm:dev
+    container_name: ie-app
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    working_dir: /app
+    command: bash
+    tty: true
+    stdin_open: true
+
+  # docker compose --profile annotate up labelstudio
+  labelstudio:
+    image: heartexlabs/label-studio:latest
+    container_name: ie-labelstudio
+    profiles: ["annotate"]
+    ports:
+      - "8080:8080"
+    environment:
+      - LABEL_STUDIO_USERNAME=${LABEL_STUDIO_USERNAME:-admin@example.com}
+      - LABEL_STUDIO_PASSWORD=${LABEL_STUDIO_PASSWORD:-changeme123}
+    volumes:
+      - labelstudio_data:/label-studio/data
+      - ./data:/label-studio/files/data
+
+  # docker compose --profile storage up minio
+  minio:
+    image: minio/minio:latest
+    container_name: ie-minio
+    profiles: ["storage"]
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+
+volumes:
+  labelstudio_data:
+  minio_data:
