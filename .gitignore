@@ -41,3 +41,9 @@ reports/
 data/processed/*/images/
 data/processed/*/ocr_gold/
 data/processed/*/manifest.jsonl
+
+# Demo artifacts: rebuilt with `make demo-cache`, and the VLM payload
+# round-trips through Colab rather than living in the repo.
+demo_cache/
+vlm_payload.zip
+vlm_outputs.json

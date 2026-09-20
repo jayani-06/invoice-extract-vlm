@@ -22,7 +22,16 @@ def load_quantized_vlm(model_id: str, four_bit: bool = True) -> tuple[Any, Any]:
     for the size threshold and rationale).
     """
     import torch
-    from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
+    from transformers import AutoProcessor, BitsAndBytesConfig
+
+    # `AutoModelForVision2Seq` was renamed to `AutoModelForImageTextToText` and
+    # then removed in transformers v5. Probing keeps this working across both
+    # generations -- pinning either name breaks on the other, and the failure
+    # only surfaces on a GPU box, which is the worst place to discover it.
+    try:
+        from transformers import AutoModelForImageTextToText as AutoVLM
+    except ImportError:  # transformers < 4.46
+        from transformers import AutoModelForVision2Seq as AutoVLM
 
     quantization_config = (
         BitsAndBytesConfig(
@@ -35,10 +44,10 @@ def load_quantized_vlm(model_id: str, four_bit: bool = True) -> tuple[Any, Any]:
         else None
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoVLM.from_pretrained(
         model_id,
         quantization_config=quantization_config,
-        torch_dtype=torch.float16,
+        dtype=torch.float16,
         device_map="auto",
     )
     processor = AutoProcessor.from_pretrained(model_id)

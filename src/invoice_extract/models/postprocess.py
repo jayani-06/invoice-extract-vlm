@@ -299,16 +299,18 @@ def check_arithmetic(doc: dict[str, Any], tolerance: float = 0.02) -> Consistenc
 
     grand = totals.get("grand_total")
     if grand is not None and subtotal is not None:
+        # `subtotal` is the net taxable value: discounts are already netted into
+        # it via each row's `line_total`, so subtracting `discount_total` here
+        # would remove them twice. See schema/schema.md for the convention.
         expected = (
             subtotal
             + (tax_total if tax_total is not None else tax_sum)
-            - (totals.get("discount_total") or 0.0)
             + (totals.get("shipping") or 0.0)
             + (totals.get("round_off") or 0.0)
         )
         if not close(expected, grand):
             problems.append(
-                f"subtotal+tax-discount+shipping+round_off={expected:.2f} != grand_total={grand:.2f}"
+                f"subtotal+tax+shipping+round_off={expected:.2f} != grand_total={grand:.2f}"
             )
 
     for i, li in enumerate(line_items):
@@ -317,11 +319,17 @@ def check_arithmetic(doc: dict[str, Any], tolerance: float = 0.02) -> Consistenc
             qty is not None
             and price is not None
             and total is not None
-            and not close(qty * price, total - (li.get("tax_amount") or 0.0))
+            # Expected: quantity x unit_price, net of the row discount, before
+            # tax. The tax-inclusive form is still accepted because plenty of
+            # real invoices print it that way, and flagging every one of those
+            # would drown the genuine errors.
+            and not close(qty * price - (li.get("discount") or 0.0), total)
             and not close(qty * price, total)
+            and not close(qty * price + (li.get("tax_amount") or 0.0), total)
         ):
             problems.append(
-                f"line_items[{i}]: quantity*unit_price={qty * price:.2f} != line_total={total:.2f}"
+                f"line_items[{i}]: quantity*unit_price-discount="
+                f"{qty * price - (li.get('discount') or 0.0):.2f} != line_total={total:.2f}"
             )
 
     return ConsistencyReport(problems)
@@ -360,8 +368,17 @@ def _coerce_party(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     out = {k: _clean_str(v) for k, v in raw.items() if k in _PARTY_KEYS}
+
     if out.get("gstin"):
-        out["gstin"] = normalize_gstin(out["gstin"])
+        gstin = normalize_gstin(out["gstin"])
+        # Keep anything structurally GSTIN-shaped, even with a bad check digit
+        # -- that is a real anomaly signal Phase 3 wants. Drop anything else: a
+        # model that writes an address into `gstin` has extracted the wrong
+        # field, and passing it through produces a schema-invalid document,
+        # which breaks this pipeline's one hard guarantee. Observed for real:
+        # Qwen2-VL-2B put a 39-character US address here on a FATURA2 invoice.
+        out["gstin"] = gstin if gstin and GSTIN_RE.match(gstin) else None
+
     return {k: v for k, v in out.items() if v is not None}
 
 

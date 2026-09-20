@@ -1,4 +1,4 @@
-.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 docker-build docker-up
+.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	docker-build docker-up
 
 install:
 	uv pip install --system -e .
@@ -87,3 +87,47 @@ extract-ablation:
 	python scripts/run_extraction_ablation.py 		--corpus $(CORPUS) --extractors null rules 		--ocr-source $(OCR_SOURCE) --out reports/phase2_ablation
 
 phase2: extract-ablation
+
+# ------------------------------------------------- third-party benchmark
+
+FATURA2 ?= data/processed/fatura2
+FATURA2_LIMIT ?= 300
+
+# FATURA2: 50 layout templates we did not design. This is the only corpus that
+# can say anything about layout generalisation; everything else here is ours.
+fatura2:
+	python scripts/convert_fatura2.py --split test --out $(FATURA2) --limit $(FATURA2_LIMIT)
+
+# The tag vocabulary ships as bare integers with no label names, so the map was
+# inferred. Re-run this after any dataset update.
+fatura2-audit:
+	python scripts/convert_fatura2.py --audit-tags
+
+# Header fields only -- FATURA2 does not annotate line items.
+fatura2-eval:
+	python scripts/run_extraction_ablation.py 		--corpus $(FATURA2) --extractors null rules 		--ocr-source gold --profiles clean --out reports/phase2_fatura2
+
+# ------------------------------------------------------------------- demo
+
+VLM_OUTPUTS ?= vlm_outputs.json
+
+# Precompute everything the demo shows. OCR is ~40 s/page, so this is done once
+# up front rather than on click -- a demo that stalls mid-review is worse than
+# one that took 20 minutes to prepare.
+demo-cache:
+	python scripts/build_demo_cache.py
+
+# Same, minus OCR. ~1 minute; use it while iterating on the UI.
+demo-cache-fast:
+	python scripts/build_demo_cache.py --no-ocr
+
+# Package the demo images + prompts for a Colab GPU run.
+demo-vlm-payload:
+	python scripts/export_vlm_payload.py
+
+# Fold the Colab results back in, so screen 4 can show rules vs model.
+demo-vlm-merge:
+	python scripts/build_demo_cache.py --vlm $(VLM_OUTPUTS)
+
+demo:
+	streamlit run demo/app.py

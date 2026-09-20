@@ -31,6 +31,10 @@ This repo is deliberately sequenced so nothing downstream gets built on sand:
 
 ## Quickstart
 
+> **Windows:** `make` is not installed with Windows. Use `.\run.ps1 <task>`
+> instead — same task names (`.\run.ps1 demo`, `.\run.ps1 test`). Run
+> `.\run.ps1 help` to list them.
+
 ```bash
 # Environment
 uv venv && source .venv/bin/activate   # or: python -m venv .venv && source .venv/bin/activate
@@ -52,10 +56,16 @@ make figure
 # Phase 2: extraction headline table (perfect-OCR ceiling)
 make extract-ablation
 
-# With a real OCR engine installed
-make ocr-install        # or: make paddle-install
-make ablation ENGINE=tesseract
+# Third-party benchmark: 50 layouts we did not design
+make fatura2 && make fatura2-eval
+
+# Real OCR (PaddleOCR is already installed)
+make ablation ENGINE=paddle
 make extract-ablation OCR_SOURCE=engine
+
+# The demo (see demo/README.md)
+make demo-cache        # once, ~4 min: precomputes OCR + extraction
+make demo              # opens the 5-screen walkthrough
 ```
 
 ## Layout
@@ -65,7 +75,7 @@ schema/                     canonical JSON Schema + docs + example
 src/invoice_extract/
   data/models.py            pydantic mirror of the schema
   data/validate.py          jsonschema + pydantic validation, totals consistency
-  data/converters/          per-dataset -> canonical (fatura/sroie/cord/gst_in)
+  data/converters/          per-dataset -> canonical (fatura2/sroie/cord/gst_in)
   reading_order.py          shared visual-line grouping (renderer + OCR + harness)
   render/                   canonical JSON -> page image + word-level ground truth
   degrade/                  scan-artifact simulation (12 transforms, 4 profiles)
@@ -84,12 +94,14 @@ src/invoice_extract/
 scripts/                    download_*, convert_*, generate_synthetic_gst_invoices.py,
                             build_image_corpus.py, make_pipeline_figure.py,
                             run_preprocess_ablation.py, run_extraction.py,
-                            run_extraction_ablation.py
-tests/                      pytest suite (312 tests)
+                            run_extraction_ablation.py, convert_fatura2.py
+tests/                      pytest suite (347 tests)
 configs/compute_plan.md     Colab / Kaggle T4 inference plan, quantization decision
 docs/phase1_preprocessing.md  Phase 1 design, findings, how to run the ablation
 docs/phase2_extraction.md     Phase 2 design, results, honest limitations
-notebooks/                  Colab/Kaggle baseline-inference notebook skeleton
+demo/                       Streamlit demo app + its README
+notebooks/                  Colab notebooks (incl. vlm_demo_outputs.ipynb)
+run.ps1                     Windows task runner (mirrors the Makefile)
 docker-compose.yml          app (dev) + optional labelstudio/minio profiles
 ```
 
@@ -103,33 +115,66 @@ images, 600 word-level OCR ground-truth files, 62,092 annotated words, 150/150
 unique layout combinations, 0 schema violations. Reproducible with
 `make corpus-full`; not tracked in git.
 
-**Phase 1 (code complete, awaiting an OCR engine)** - rendering, degradation,
-preprocessing, the OCR abstraction and CER/WER metrics are all built and tested.
-No OCR engine is installed on the dev machine, so **no real CER number exists**
-and the exit criteria (CER < 8%, >= 5-point improvement from preprocessing) are
-**not yet demonstrated**. See `docs/phase1_preprocessing.md`.
+**Phase 1 (run; both exit criteria FAILED)** - PaddleOCR 3.7 installed and the
+ablation executed on real images. Reported as a result, not deferred:
+
+| Criterion | Outcome |
+|---|---|
+| CER < 8% on the noisy subset | **FAILED** - best `medium` CER 0.162, `heavy` 0.369 (clean passes at 0.005) |
+| Preprocessing improves CER by >= 5 pts | **FAILED** - best delta is -1.2 pts; on `heavy` preprocessing is *worse* |
+
+The interesting part is that the two metric families disagree. On heavily
+degraded pages `deskew` raises **word accuracy from 0.273 to 0.479 (+21 pts)**
+and detection F1 from 0.294 to 0.528, while nudging CER the wrong way. CER is
+text-only - a modern detector reads a skewed page fine - whereas word accuracy
+requires the word to be found *in the right place*, which is what Phase 2
+extraction actually depends on. Deskewing earns its place; the exit criterion
+was written against the wrong metric. Sauvola binarisation is the worst row in
+every CER column: PaddleOCR's detector is trained on continuous-tone images and
+binarising discards what it uses. See `docs/phase1_preprocessing.md`.
 
 **Phase 2 (code complete, VLM unrun)** - post-processing, prompting, rules and
 null baselines, the VLM wrapper, registry, runner and ablation runner, all
-tested. At the perfect-OCR ceiling the **regex baseline already meets both exit
-criteria** (header accuracy 0.991, line-item F1 1.000). That is the honest
-headline: this corpus cannot distinguish a VLM from a regex, so the model has to
-justify itself on real scans, unseen layouts or degraded OCR rather than here.
-**The VLM itself has never been run** - there is no GPU on the dev machine, so
-`models/vlm.py` is unit-tested through an injected fake model but its generation
-call is unverified. See `docs/phase2_extraction.md`.
+tested. The headline is a generalisation gap, measured on a third-party
+benchmark:
+
+| Corpus | Header accuracy (rules baseline) |
+|---|---|
+| Our synthetic invoices (150 docs) | **0.983** |
+| FATURA2 (300 docs, 50 unseen layouts) | **0.559** |
+
+A 42-point drop, reproducing FATURA's central claim on our own baseline.
+`vendor.name` collapses from 0.900 to **0.000** - worse than predicting nothing.
+So the regex baseline saturates *our* corpus, not the task, and there is a
+large measurable gap for a VLM to close. **The VLM itself has never been run** -
+there is no GPU on this machine, so `models/vlm.py` is unit-tested through an
+injected fake model but its generation call is unverified. See
+`docs/phase2_extraction.md`.
+
+**Recently closed**
+
+- **OCR engine installed.** PaddleOCR 3.7 + paddlepaddle 3.3.1, pip-only. Two
+  workarounds were needed and are documented in `ocr/paddle.py`: oneDNN crashes
+  the detector on this CPU (`enable_mkldnn=False`), and word-level boxes are
+  opt-in (`return_word_box=True`). A `fast=True` preset swaps to mobile models
+  for a 2.6x speedup (~40 s/page vs ~105 s/page, CPU).
+- **FATURA2 converted.** 10,000-invoice / 50-layout third-party benchmark
+  (CC-BY-4.0) via the Hugging Face parquet mirror, since Zenodo was returning
+  504s. `scripts/convert_fatura2.py`. The tag vocabulary ships as bare integers
+  with no label names, so it was inferred by audit; `--audit-tags` re-verifies
+  it and fails loudly if a future release renumbers them.
+- **`line_total` convention settled.** It is the pre-tax taxable value; see
+  `schema/schema.md`. Fixing it exposed a second bug - both consistency checks
+  subtracted `discount_total` from a `subtotal` that already had it netted in.
+  Warnings went from 46/150 and 150/150 to **0/150 and 0/150**.
 
 **Still open**
 
-- **No OCR engine installed.** Everything is measured at a perfect-OCR ceiling.
-- **FATURA / SROIE / CORD unconverted.** `scripts/download_fatura.py` is an
-  unfilled template with no confirmed URL. Every result so far is on synthetic
-  renders, so the layout-generalisation claim has no third-party benchmark.
-- **`line_total` convention unsettled.** The generator makes it tax-inclusive,
-  so `sum(line_items) != subtotal + tax - discount` and 46 of 150 documents trip
-  `check_totals_consistency`. Gold matches what is printed, so extraction
-  scoring is unaffected, but Phase 3 anomaly detection cannot use line-item
-  arithmetic until this is decided.
+- **The VLM has never been run.** No GPU here.
+- **No real *photographed* documents.** FATURA2 is third-party but still
+  synthetic. SROIE (real photographed receipts) and CORD remain unconverted.
+- **FATURA2 has no line-item annotations** (its table is one placeholder
+  token), so the line-item criterion is verified only on our own corpus.
 
 ## A note on instruments vs. results
 

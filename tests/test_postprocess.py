@@ -326,6 +326,41 @@ class TestCoerceDocument:
             assert set(doc) >= {"parties", "invoice_meta", "line_items", "tax_lines", "totals"}
             assert isinstance(doc["line_items"], list)
 
+    def test_a_non_gstin_in_the_gstin_field_is_dropped(self):
+        """A model that writes an address into `gstin` extracted the wrong
+        field. Passing it through yields a schema-invalid document, breaking
+        this pipeline's one hard guarantee. Seen in a real Qwen2-VL-2B run."""
+        doc = coerce_document(
+            {"parties": {"vendor": {"gstin": "4894 Melanie Pass Apt. 742, Tammyland, SD 42587 US"}}}
+        )
+        assert doc["parties"]["vendor"].get("gstin") is None
+
+    def test_a_structurally_valid_gstin_survives_a_bad_checksum(self):
+        """A wrong check digit is a signal for Phase 3 anomaly detection, not
+        grounds for discarding the value."""
+        doc = coerce_document({"parties": {"vendor": {"gstin": "29AAAAA0000A1Z5"}}})
+        assert doc["parties"]["vendor"]["gstin"] == "29AAAAA0000A1Z5"
+        assert validate_gstin(doc["parties"]["vendor"]["gstin"])  # still flagged
+
+    def test_coerced_output_is_always_schema_valid(self):
+        """The guarantee: whatever a model returns, finalize() emits a document
+        the schema accepts."""
+        from invoice_extract.data.validate import validate_jsonschema
+
+        for junk in (
+            {"parties": {"vendor": {"gstin": "not a gstin at all", "name": 12345}}},
+            {"totals": {"grand_total": "garbage"}, "tax_lines": [{"type": "???"}]},
+            {"line_items": [{"quantity": "many", "line_total": None}]},
+            {"currency": "rupees"},
+        ):
+            doc, _ = finalize(
+                junk,
+                "d",
+                {"dataset": "other", "original_id": "d", "split": "test"},
+                [{"page_index": 0, "image_path": "x.png", "width": 1, "height": 1}],
+            )
+            assert validate_jsonschema(doc) == [], junk
+
     def test_invalid_currency_is_replaced_not_kept(self):
         assert coerce_document({"currency": "rupees"}).get("currency") in (None, "INR")
 

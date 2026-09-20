@@ -10,32 +10,64 @@ date, grand total); ≥ 80% F1 on line items.
 
 ## Result up front
 
+**On our own synthetic corpus** (150 documents, perfect-OCR ceiling):
+
 | Extractor | Header accuracy | Line-item F1 | Critical-fields | Macro field acc |
 |---|---|---|---|---|
 | `null` (predicts nothing) | 0.000 | n/a | 0.000 | 0.225 |
-| `rules` (OCR + regex) | **0.991** | **1.000** | 0.947 | 0.918 |
-| `vlm:qwen2-vl-2b` | *not yet run — no GPU* | | | |
+| `rules` (OCR + regex) | **0.983** | **0.998** | 0.900 | 0.918 |
 
-150 documents, clean profile, **perfect-OCR ceiling** (`--ocr-source gold`).
-Reproduce with `make extract-ablation`.
+**On FATURA2** (300 documents, 50 unseen layouts, third-party, CC-BY-4.0):
 
-**Both exit criteria are met — by the regex baseline.** That is the honest
-headline, and it is a more useful finding than a VLM number would have been:
+| Extractor | Header accuracy | Critical-fields |
+|---|---|---|
+| `null` | 0.083 | 0.000 |
+| `rules` | **0.559** | **0.000** |
 
-> On clean, synthetic, single-page invoices with perfect OCR, a label-anchored
-> regex baseline already saturates the extraction task. The VLM has to justify
-> itself somewhere else — on real scans, on unseen layouts, on multi-page
-> documents, or on degraded OCR — not on this corpus.
+Per field, the collapse is not uniform — and where it lands is the whole story:
 
-That conclusion also supports the project's own framing: the research
-contribution lives in Phases 3–4 (RAG enrichment and vendor validation), not
-in extraction. It should be stated plainly in the report rather than buried,
-because a reviewer will otherwise ask why a 2B-parameter model is in a
-pipeline a regex can already do.
+| Field | Synthetic | FATURA2 | Δ |
+|---|---|---|---|
+| `totals.grand_total` | 1.000 | 1.000 | **0.000** |
+| `invoice_meta.invoice_number` | 1.000 | 0.667 | −0.333 |
+| `invoice_meta.invoice_date` | 1.000 | 0.570 | −0.430 |
+| `parties.vendor.name` | 0.900 | **0.000** | **−0.900** |
+| **Header accuracy** | **0.983** | **0.559** | **−0.424** |
 
-The number is *not* evidence the VLM is unnecessary. It is evidence that **this
-corpus cannot tell the two apart**, which is a statement about the corpus. See
-"What Phase 2 does not establish".
+### What this means
+
+The regex baseline meets both exit criteria on our corpus and **fails badly on
+a third-party one — a 42-point drop in header accuracy.** This reproduces
+FATURA's central claim (ref [6]) on our own baseline: template-tuned extraction
+collapses on unseen layouts.
+
+Read field by field, the mechanism is clear:
+
+- **`grand_total` transfers perfectly (1.000 → 1.000).** "TOTAL: 441.14 EUR" is
+  a genuinely universal pattern, and a label anchor generalises across all 50
+  layouts.
+- **`invoice_date` and `invoice_number` degrade (−0.43, −0.33)** because the
+  label vocabulary widens: "Date" vs "Invoice Date" vs "Date of Issue", and
+  date formats our generator never produced.
+- **`vendor.name` goes to zero.** This is the sharpest result in the phase. Our
+  rule takes the first substantive line of the page, which is correct on every
+  invoice we render and wrong on essentially every FATURA layout, where the
+  vendor name sits beside a logo block partway down the page. **The `null`
+  extractor scores 0.333 on this field** (33% of FATURA2 documents have no
+  vendor annotation, and null-vs-null counts as correct), so the rules baseline
+  is *worse than predicting nothing* — the clearest possible demonstration that
+  a positional heuristic has no transfer.
+
+This **overturns the conclusion Phase 2 would have reached on synthetic data
+alone.** The earlier reading — "a regex saturates the task, so the VLM must
+justify itself elsewhere" — was an artefact of evaluating on documents we
+generated ourselves. On unseen layouts there is a large, measurable gap
+(0.559 → the 0.90 exit criterion), and closing it is exactly what a VLM is for.
+That is the argument for the model, and it is now evidence rather than
+assertion.
+
+The VLM itself has still **not been run** (no GPU on this machine), so the
+right-hand column of this comparison is empty and no claim is made about it.
 
 ---
 
@@ -198,11 +230,20 @@ python scripts/run_extraction_ablation.py --corpus data/processed/gst_in_synthet
 
 ### What Phase 2 does not establish
 
-- **Nothing about real documents.** Results are on synthetic renders: no
-  stamps, handwriting, folds, logos, or non-Latin script. FATURA / SROIE / CORD
-  remain unconverted (`scripts/download_fatura.py` is an unfilled template with
-  no confirmed URL), so the layout-generalisation claim has no third-party
-  benchmark behind it.
+- **Still nothing about *real* documents.** FATURA2 is a third-party benchmark
+  but it is still synthetic — template-generated invoices, no stamps,
+  handwriting, folds, or non-Latin script. It establishes layout
+  generalisation, not scan realism. SROIE (real photographed receipts) and CORD
+  remain unconverted and are the obvious next acquisition.
+- **FATURA2 has no line-item annotations.** Tag 10 is a single `table`
+  placeholder covering the whole table region, so every converted document has
+  `line_items: []`. The line-item exit criterion is therefore verified only on
+  our own corpus, where it is least meaningful.
+- **The FATURA2 numbers are a perfect-OCR ceiling too.** The converter reuses
+  FATURA2's own tokens and boxes as ground-truth text, so no OCR engine ran.
+  That transcript is also *partial* — it covers annotated regions only, and the
+  line-item table's text is simply absent — which is fine for header fields and
+  useless for CER.
 - **Nothing about robustness to degradation.** Under `--ocr-source gold` the
   degradation profiles are inert: they move word boxes, not words, so a
   text-only extractor scores identically on `heavy` and `clean`. The runner now
@@ -210,19 +251,28 @@ python scripts/run_extraction_ablation.py --corpus data/processed/gst_in_synthet
   reading pixels, makes that axis mean anything.
 - **Nothing about multi-page documents.** One page per document; the page
   retrieval step from refs [3] and [4] is untouched.
-- **The rules baseline is tuned to a renderer we wrote.** Its rules are
-  label-anchored rather than position-anchored specifically to limit this, but
-  a baseline evaluated on synthetic data it was developed against is flattered
-  regardless. Treat 0.991 as an upper bound on its real-world performance.
+- **The rules baseline is tuned to a renderer we wrote**, and FATURA2 now
+  quantifies exactly how much that flattered it: 0.983 on home turf, 0.559 on
+  unseen layouts. Treat any number measured only on the synthetic corpus as an
+  upper bound, not an estimate.
 
-### Open question for Phase 3
+### Settled: the `line_total` convention
 
-The generator makes `line_total` **tax-inclusive**
-(`qty × unit_price = 55,285.30 → line_total = 58,049.56`), so
-`sum(line_items) ≠ subtotal + tax − discount` and 46 of 150 documents trip
-Phase 0's `check_totals_consistency`. Gold matches what is printed, so
-extraction scoring is unaffected — but Phase 3's anomaly detection cannot use
-line-item arithmetic as a signal until the convention is settled. Conventionally
-`line_total` is the pre-tax taxable value. Either regenerate with pre-tax line
-totals, or document the tax-inclusive convention in `schema/schema.md` and relax
-the Phase 0 check.
+Previously open, now decided and implemented. `line_total` is the **taxable
+value** of a row — `quantity x unit_price`, net of that row's discount, before
+tax — and `subtotal` is the sum of those. This is written up in
+`schema/schema.md`.
+
+Fixing it also uncovered a second bug: both consistency checks subtracted
+`discount_total` from a `subtotal` that already had discounts netted into it,
+double-counting them. That is why 46 of 150 documents were flagged.
+
+After regenerating the corpus and correcting both checks:
+
+| | before | after |
+|---|---|---|
+| Phase 0 `check_totals_consistency` warnings | 46 / 150 | **0 / 150** |
+| `postprocess.check_arithmetic` flags | 150 / 150 | **0 / 150** |
+
+Phase 3 can now use line-item arithmetic as an anomaly signal, because a flag
+means a genuine inconsistency rather than a convention mismatch.

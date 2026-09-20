@@ -90,10 +90,9 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["type", "amount"],
                 "properties": {
                     "type": {
-                        "type": "string",
+                        "type": ["string", "null"],
                         "enum": [
                             "CGST",
                             "SGST",
@@ -103,10 +102,19 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                             "GST",
                             "SALES_TAX",
                             "OTHER",
+                            None,
                         ],
                     },
                     "rate": {"type": ["number", "null"]},
-                    "amount": {"type": "number"},
+                    # Nullable here even though the canonical schema requires a
+                    # number, so the prompt template can show `null` like every
+                    # other field. A concrete example value (we used 123.45) is
+                    # copied verbatim by small models -- Qwen2-VL-2B parroted it
+                    # in 8/8 responses -- which corrupts the very field it is
+                    # meant to illustrate. `coerce_document` drops tax lines
+                    # that arrive without an amount, so permitting null here
+                    # costs nothing downstream.
+                    "amount": {"type": ["number", "null"]},
                 },
             },
         },
@@ -156,10 +164,10 @@ TARGET_SKELETON = """{
     "po_number": null, "payment_terms": null
   },
   "line_items": [
-    {"line_no": 1, "description": null, "hsn_sac_code": null, "quantity": null,
+    {"line_no": null, "description": null, "hsn_sac_code": null, "quantity": null,
      "unit_price": null, "tax_rate": null, "tax_amount": null, "line_total": null}
   ],
-  "tax_lines": [{"type": "CGST", "rate": 9, "amount": 123.45}],
+  "tax_lines": [{"type": null, "rate": null, "amount": null}],
   "totals": {
     "subtotal": null, "discount_total": null, "tax_total": null,
     "shipping": null, "round_off": null, "grand_total": null
@@ -181,9 +189,12 @@ Rules:
 - Amounts and quantities must be JSON numbers, not strings.
 - line_items must contain one entry per row of the line-item table.
 - tax_lines must contain one entry per tax component shown (CGST, SGST, IGST, ...).
-  Every tax_lines entry needs a numeric "amount"; the values in the template
-  below are only there to show the shape. Use an empty list if the document
-  shows no tax at all.
+  Use an empty list if the document shows no tax at all.
+- The "totals" object is REQUIRED. Always emit it, with grand_total filled in
+  from the document. Never omit it.
+- The template below shows the SHAPE ONLY. Every value in it is null. Replace
+  each null with what the document says, or leave it null if the document does
+  not say. Never copy a value out of the template itself.
 - Do not invent rows, taxes, or parties that are not on the document.
 
 Template:

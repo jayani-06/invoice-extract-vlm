@@ -36,7 +36,14 @@ def validate_pydantic(doc: dict) -> list[str]:
 
 
 def check_totals_consistency(doc: dict, tolerance: float = 0.02) -> list[str]:
-    """Soft check (warnings, not schema errors): totals should roughly add up."""
+    """Soft check (warnings, not schema errors): totals should roughly add up.
+
+    Convention (see schema/schema.md): `line_total` is the taxable value of a
+    row -- quantity x unit_price, net of that row's discount, BEFORE tax -- and
+    `subtotal` is the sum of those. Discount is therefore already netted into
+    `subtotal` and must NOT be subtracted again here; doing so was an earlier
+    bug that fired on every document carrying a discount.
+    """
     warnings: list[str] = []
     totals = doc.get("totals", {})
     line_items = doc.get("line_items", [])
@@ -46,15 +53,9 @@ def check_totals_consistency(doc: dict, tolerance: float = 0.02) -> list[str]:
         computed = sum(
             (li.get("line_total") or 0) for li in line_items if li.get("line_total") is not None
         )
-        expected = (
-            totals["subtotal"]
-            + (totals.get("tax_total") or 0)
-            - (totals.get("discount_total") or 0)
-        )
+        expected = totals["subtotal"]
         if computed and abs(computed - expected) > tolerance * max(abs(expected), 1):
-            warnings.append(
-                f"sum(line_items.line_total)={computed:.2f} vs subtotal+tax-discount={expected:.2f}"
-            )
+            warnings.append(f"sum(line_items.line_total)={computed:.2f} vs subtotal={expected:.2f}")
 
     if tax_lines and totals.get("tax_total") is not None:
         tax_sum = sum(t.get("amount", 0) for t in tax_lines)

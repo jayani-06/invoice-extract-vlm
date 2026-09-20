@@ -41,28 +41,55 @@ Files:
    of line-level `tax_amount` otherwise. `scripts/validate_examples.py` warns
    (does not hard-fail) on mismatches beyond a small rounding tolerance.
 
-3. **Null vs. absent.** Required top-level keys (`invoice_meta`, `totals`,
+3. **Money conventions (`line_total` and `subtotal`).** These are the two
+   fields whose meaning is genuinely ambiguous across real invoices, so this
+   project fixes them:
+
+   - `line_items[].line_total` is the **taxable value** of the row:
+     `quantity x unit_price`, **net of that row's `discount`**, **before tax**.
+     This is the conventional meaning of the "Amount" column on a GST invoice
+     and is what makes a printed page internally consistent — the Subtotal is
+     the sum of the Amount column.
+   - `totals.subtotal` is the **net** taxable value: `sum(line_items[].line_total)`.
+     Discounts are therefore **already netted into `subtotal`** and must not be
+     subtracted from it again.
+   - `totals.discount_total` is `sum(line_items[].discount)`, reported for
+     visibility, not as a further deduction.
+   - `totals.grand_total` = `subtotal + tax_total + shipping + round_off`.
+
+   The alternative convention — a tax-inclusive `line_total`, so that
+   `sum(line_total) == grand_total` — is what the synthetic generator produced
+   originally. It was rejected because it renders an invoice whose Amount
+   column does not add up to its own Subtotal, and because it leaves
+   downstream anomaly detection unable to use line-item arithmetic as a
+   signal. `check_totals_consistency` and
+   `models.postprocess.check_arithmetic` both enforce the convention above;
+   the per-line check still *accepts* a tax-inclusive `line_total` without
+   flagging it, because plenty of real vendors print it that way and flagging
+   every one would drown the genuine errors.
+
+4. **Null vs. absent.** Required top-level keys (`invoice_meta`, `totals`,
    etc.) must always be present, but individual leaf fields are typed
    `["<type>", "null"]` and should be set to `null` when the value is
    illegible, absent from the document, or not applicable — never omitted.
    This keeps every gold/prediction record structurally identical, which the
    eval harness's field-by-field diff depends on.
 
-4. **`gstin`/`hsn_sac_code` vs. generic `tax_id`.** Indian GST documents get
+5. **`gstin`/`hsn_sac_code` vs. generic `tax_id`.** Indian GST documents get
    dedicated, format-validated fields (`gstin` has a regex for the 15-char
    GSTIN format). Non-Indian datasets (FATURA/SROIE/CORD, mostly synthetic
    Western invoices and receipts) use the generic `tax_id` on the same
    `party` object instead. A document should populate one or the other, not
    both, for a given party.
 
-5. **`source` block for provenance.** Every converted document keeps its
+6. **`source` block for provenance.** Every converted document keeps its
    original dataset name, original id/filename, and split. This is what lets
    you trace a weird prediction back to the source image, and what lets the
    harness report metrics broken down by source dataset (a VLM baseline will
    very likely do better on FATURA's clean layouts than on scanned GST
    invoices — you want that visible, not averaged away).
 
-6. **Dates are ISO 8601 strings (`YYYY-MM-DD`), not datetimes.** Invoices
+7. **Dates are ISO 8601 strings (`YYYY-MM-DD`), not datetimes.** Invoices
    don't carry a time component; keeping this a plain pattern-validated
    string (rather than a datetime object) avoids timezone bugs and keeps
    JSON diffing trivial for the exact-match metric.

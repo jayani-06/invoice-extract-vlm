@@ -70,6 +70,31 @@ class TestExtractionSchema:
         skeleton = json.loads(TARGET_SKELETON)
         jsonschema.Draft202012Validator(EXTRACTION_SCHEMA).validate(skeleton)
 
+    def test_the_template_contains_no_copyable_values(self):
+        """Small models copy example values straight out of the prompt.
+        Qwen2-VL-2B reproduced a placeholder `123.45` in 8/8 responses, which
+        corrupted the exact field the example was meant to illustrate. Every
+        value in the template must therefore be null."""
+        numbers = [
+            token.strip(',"')
+            for token in TARGET_SKELETON.replace(":", " ")
+            .replace("{", " ")
+            .replace("}", " ")
+            .split()
+            if token.strip(',"').replace(".", "").replace("-", "").isdigit()
+        ]
+        assert numbers == [], f"copyable literals in the prompt template: {numbers}"
+
+    def test_the_prompt_tells_the_model_not_to_copy_the_template(self):
+        prompt = build_prompt()
+        assert "SHAPE ONLY" in prompt
+        assert "Never copy a value out of the template" in prompt
+
+    def test_the_prompt_demands_a_totals_block(self):
+        """Qwen2-VL-2B omitted `totals` entirely on 4/8 documents, losing
+        grand_total outright."""
+        assert '"totals" object is REQUIRED' in build_prompt()
+
     def test_it_excludes_caller_owned_identity_fields(self):
         """A model must not invent doc_id/source/pages -- those are provenance,
         and a hallucinated one is worse than a missing one."""

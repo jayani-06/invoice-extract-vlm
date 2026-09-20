@@ -124,10 +124,16 @@ def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
         qty = rng.randint(1, 20)
         unit_price = round(rng.uniform(*price_range), 2)
         discount = round(unit_price * qty * rng.choice([0, 0, 0, 0.02, 0.05]), 2)
-        line_subtotal = round(unit_price * qty - discount, 2)
-        tax_amount = round(line_subtotal * rate / 100, 2)
-        line_total = round(line_subtotal + tax_amount, 2)
-        subtotal += line_subtotal
+        # `line_total` is the TAXABLE VALUE: quantity x unit_price, net of the
+        # line discount, BEFORE tax. This is the conventional meaning of the
+        # "Amount" column on a GST invoice, and it is what makes the printed
+        # page internally consistent -- the Subtotal is the sum of the Amount
+        # column. A tax-inclusive line_total (the earlier behaviour) rendered
+        # an invoice whose Amount column did not add up to its own Subtotal,
+        # and left Phase 3 unable to use line-item arithmetic as a signal.
+        line_total = round(unit_price * qty - discount, 2)
+        tax_amount = round(line_total * rate / 100, 2)
+        subtotal += line_total
         line_items.append(
             {
                 "line_no": i + 1,

@@ -9,6 +9,98 @@ improve CER by ≥ 5 absolute points versus the raw degraded page.
 
 ---
 
+## Results
+
+PaddleOCR 3.7 (PP-OCRv5 mobile, CPU), 4 documents per cell, 3 degradation
+profiles. Reproduce with `make ablation ENGINE=paddle`.
+
+### Normalised CER — preprocessing does not help, and binarisation hurts badly
+
+| Pipeline | clean | medium | heavy |
+|---|---|---|---|
+| `raw` | **0.0046** | 0.1738 | **0.3687** |
+| `gray+border+deskew` | 0.0042 | **0.1618** | 0.4294 |
+| `full(no-binarize)` | 0.0061 | 0.2330 | 0.4275 |
+| `full+sauvola` | 0.0228 | 0.4300 | 0.4589 |
+
+### Word accuracy (located *and* read correctly) — preprocessing helps a lot
+
+| Pipeline | clean | medium | heavy |
+|---|---|---|---|
+| `raw` | **0.5810** | 0.3056 | 0.2731 |
+| `gray+border+deskew` | 0.5347 | **0.4190** | **0.4792** |
+| `full(no-binarize)` | 0.4560 | 0.4074 | 0.4769 |
+| `full+sauvola` | 0.5093 | 0.3495 | 0.4167 |
+
+### The two metric families disagree, and that is the finding
+
+On heavily degraded pages, `deskew` **raises word accuracy from 0.273 to 0.479
+(+21 points)** and detection F1 from 0.294 to 0.528 — while making CER slightly
+*worse*. That is not a contradiction; the metrics measure different things:
+
+- **CER is text-only.** A modern detector reads a skewed page perfectly well;
+  the characters come out right even when the page is at 5 degrees.
+- **Word accuracy requires the word to be found *in the right place*.** On a
+  skewed page the predicted boxes are rotated away from the gold boxes, IoU
+  matching fails, and the word scores as missed even though it was read
+  correctly.
+
+**Word accuracy is the metric that matters downstream.** Phase 2 extraction
+needs to know *which field* a value belongs to, and that is a spatial question
+— a correctly-read total in the wrong place is not a usable extraction. So the
+honest summary is: deskewing earns its place, and CER alone would have hidden
+that.
+
+### Against the exit criteria — both failed
+
+| Criterion | Result |
+|---|---|
+| CER < 8% on the noisy subset | **FAILED.** Best `medium` CER is 0.162; best `heavy` is 0.369. Clean passes easily at 0.005. |
+| Preprocessing improves CER by >= 5 points | **FAILED.** Best CER delta from preprocessing is −1.2 points (medium); on heavy it is +6 points *worse*. |
+
+Stating this plainly rather than reframing: **the pipeline as specified did not
+meet its targets.** What it did establish is that the targets were written for
+the wrong metric — the criterion should be word accuracy, where preprocessing
+delivers +21 points on the hardest pages.
+
+### Why classical preprocessing backfires on a modern detector
+
+The Phase 1 plan assumed a Tesseract-era pipeline, where binarisation and
+denoising are prerequisites. PaddleOCR's detector is a CNN trained on
+photographs of real documents; it does its own normalisation internally and
+expects continuous-tone input. Sauvola binarisation throws away the grayscale
+information it was trained to use, which is why `full+sauvola` is the worst row
+in every CER column (0.43 on medium, versus 0.17 raw — a 25-point
+regression). This is consistent with refs [3] and [7] recommending hybrid
+image+text input rather than aggressive cleanup.
+
+### Cost
+
+| Pipeline | preprocessing ms/page |
+|---|---|
+| `raw` | 0 |
+| `gray+border+deskew` | 152 |
+| `full(no-binarize)` | 587 |
+| `full+sauvola` | 1053 |
+
+OCR itself dominates at ~40 s/page (CPU, mkldnn disabled — see below), so
+preprocessing cost is not the constraint; correctness is.
+
+### Caveats on these numbers
+
+- **n = 4 documents per cell.** The whole sweep took 100 minutes on CPU. The
+  deskew effect on `heavy` (+21 points word accuracy) is large enough to be
+  credible at this n; the smaller CER deltas are not, and should not be quoted
+  as precise.
+- **Detection metrics penalise tokenisation differences.** PaddleOCR splits
+  punctuation into separate tokens (`Salai` `,`), so predicted word counts run
+  ~1.8x gold. That depresses precision independently of recognition quality,
+  which is part of why absolute detection F1 looks low even on clean pages.
+- **`fast=True` models.** PP-OCRv5 mobile, chosen for a 2.6x speedup. The
+  larger PP-OCRv6 medium models may rank the pipelines differently.
+
+---
+
 ## The problem Phase 1 had to solve first
 
 Phase 0 froze the schema, wrote the eval harness, and generated 150 synthetic
@@ -222,10 +314,24 @@ Sauvola yields crisp text. This is the report figure; it is also the fastest
 way to catch a stage that is quietly destroying the page, which a single CER
 number will happily hide.
 
-**Blocked on an OCR engine install** — no engine is present on the dev machine,
-so no real CER number exists yet. The exit criteria (CER < 8%, ≥ 5-point
-improvement) are therefore **not yet demonstrated**. Everything needed to
-produce them is in place; it is one install and one `make ablation` away.
+**OCR engine installed and the ablation run.** PaddleOCR 3.7 + paddlepaddle
+3.3.1 (pip only, no system binary). Two workarounds were needed, both
+documented in `ocr/paddle.py`:
+
+- **oneDNN crashes the detector on this CPU** — paddlepaddle 3.3.1 raises
+  `ConvertPirAttribute2RuntimeAttribute not support` from the oneDNN executor.
+  `enable_mkldnn=False` avoids it; it is the default because a crash is worse
+  than being slower. This is not model-specific: PP-OCRv5 and v6 both fail.
+- **Word boxes are opt-in** — `return_word_box=True` yields real per-word
+  geometry. Without it the only option is apportioning a line box across its
+  words by character count, which fabricates the geometry that word-level
+  detection metrics then measure.
+
+A `fast=True` preset swaps to PP-OCRv5 mobile models: ~40 s/page versus
+~105 s/page on CPU.
+
+**Both exit criteria failed** — see Results above. That is reported as a
+result, not deferred.
 
 ### What Phase 1 does not establish
 

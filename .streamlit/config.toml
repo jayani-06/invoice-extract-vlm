@@ -1,0 +1,19 @@
+# Pin the light theme explicitly.
+#
+# Streamlit otherwise follows the OS setting, and on a dark-mode laptop the demo
+# renders white text on dark widgets regardless of any CSS we add -- the widget
+# colours come from the theme, and their class names are content-hashed, so
+# overriding them in CSS breaks on the next Streamlit upgrade. Setting the theme
+# is the durable fix; app.py then only styles typography.
+[theme]
+base = "light"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f4"
+textColor = "#000000"
+primaryColor = "#c1121f"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
