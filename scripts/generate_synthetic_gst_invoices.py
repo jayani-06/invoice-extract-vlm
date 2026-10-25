@@ -96,9 +96,99 @@ def gen_gstin(rng: random.Random, state_code: str) -> str:
     return first_14 + (gstin_check_digit(first_14) or "0")
 
 
+#: Identity is a property of the *company*, not of an individual invoice.
+#: Re-rolling GSTIN, address and bank details per invoice -- the original
+#: behaviour -- meant a vendor appearing on four invoices carried four
+#: different GSTINs and four different bank accounts. That makes a vendor
+#: master impossible to build, and makes bank-detail-change detection (the
+#: strongest fraud signal in the Phase 4 plan) fire on literally every
+#: invoice. Parties are therefore minted once and reused.
+_PARTY_REGISTRY: dict[str, tuple[dict, str, dict]] = {}
+
+
+def reset_party_registry() -> None:
+    """Clear the registry. Called per generation run so a fixed seed keeps
+    producing a fixed corpus rather than depending on process state."""
+    _PARTY_REGISTRY.clear()
+
+
+def gen_bank_details(rng: random.Random, name: str) -> dict:
+    """Banking details, minted once per company."""
+    return {
+        "bank_name": rng.choice(
+            ["State Bank of India", "HDFC Bank", "ICICI Bank", "Axis Bank", "Kotak Mahindra Bank"]
+        ),
+        "account_number": str(rng.randint(10**13, 10**14 - 1)),
+        "ifsc_or_swift": "".join(rng.choices(string.ascii_uppercase, k=4))
+        + "0"
+        + str(rng.randint(100000, 999999)),
+    }
+
+
+#: A vendor's price for an item is a contract rate, not a fresh random draw.
+#: Drawing uniformly per invoice gave the same (vendor, item) pair a 57% price
+#: spread, so no contract rate existed to validate an invoice against -- which
+#: made Phase 4's price-conformance check meaningless. Real quoted prices move
+#: a few percent between invoices, so that is what is modelled.
+_PRICE_REGISTRY: dict[tuple[str, str], float] = {}
+
+#: How much a vendor's price for one item drifts invoice to invoice.
+PRICE_JITTER = 0.04
+
+
+def reset_price_registry() -> None:
+    _PRICE_REGISTRY.clear()
+
+
+def vendor_price(
+    rng: random.Random, vendor: str, description: str, price_range: tuple[float, float]
+) -> float:
+    """This vendor's price for this item, stable across invoices."""
+    key = (vendor, description)
+    if key not in _PRICE_REGISTRY:
+        _PRICE_REGISTRY[key] = rng.uniform(*price_range)
+    base = _PRICE_REGISTRY[key]
+    return round(base * rng.uniform(1 - PRICE_JITTER, 1 + PRICE_JITTER), 2)
+
+
+#: Invoice numbers are a per-issuer sequence, not a random draw. Drawing from
+#: randint(1000, 9999) over 150 documents produced ~4 birthday-paradox
+#: collisions, and duplicate-invoice-number detection correctly flagged them --
+#: which read as false positives and dropped Phase 3 anomaly precision to 0.40.
+#: The detector was right; the data was wrong.
+_INVOICE_SEQUENCE: dict[str, int] = {}
+_VENDOR_INDEX: dict[str, int] = {}
+
+
+def reset_invoice_sequence() -> None:
+    _INVOICE_SEQUENCE.clear()
+    _VENDOR_INDEX.clear()
+
+
+def next_invoice_number(vendor: str, year: int) -> str:
+    """`INV-<year>-<vendor index><sequence>`, unique by construction.
+
+    The vendor part is an incrementing index, not `hash(vendor)`: Python
+    randomises string hashing per process, so a hash-derived prefix would both
+    collide across vendors and change between runs, breaking reproducibility
+    from a fixed seed.
+    """
+    if vendor not in _VENDOR_INDEX:
+        _VENDOR_INDEX[vendor] = len(_VENDOR_INDEX) + 1
+    key = f"{vendor}:{year}"
+    _INVOICE_SEQUENCE[key] = _INVOICE_SEQUENCE.get(key, 0) + 1
+    return f"INV-{year}-{_VENDOR_INDEX[vendor]:03d}{_INVOICE_SEQUENCE[key]:03d}"
+
+
 def gen_party(rng: random.Random) -> tuple[dict, str]:
     city, state, code = rng.choice(CITIES)
     name = f"{rng.choice(FIRST_WORDS)} {rng.choice(COMPANY_SUFFIXES)}"
+
+    # Same company name -> same identity, every time.
+    if name in _PARTY_REGISTRY:
+        party, party_code, _ = _PARTY_REGISTRY[name]
+        return dict(party), party_code
+
     house_no = rng.randint(1, 200)
     party = {
         "name": name,
@@ -107,7 +197,8 @@ def gen_party(rng: random.Random) -> tuple[dict, str]:
         "phone": f"+91-{rng.randint(70000,99999)}{rng.randint(10000,99999)}",
         "email": f"billing@{name.lower().split()[0]}.example",
     }
-    return party, code
+    _PARTY_REGISTRY[name] = (party, code, gen_bank_details(rng, name))
+    return dict(party), code
 
 
 def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
@@ -122,7 +213,7 @@ def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
     for i in range(n_items):
         desc, hsn, unit, price_range = rng.choice(ITEMS)
         qty = rng.randint(1, 20)
-        unit_price = round(rng.uniform(*price_range), 2)
+        unit_price = vendor_price(rng, vendor["name"], desc, price_range)
         discount = round(unit_price * qty * rng.choice([0, 0, 0, 0.02, 0.05]), 2)
         # `line_total` is the TAXABLE VALUE: quantity x unit_price, net of the
         # line discount, BEFORE tax. This is the conventional meaning of the
@@ -190,7 +281,7 @@ def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
         ],
         "parties": {"vendor": vendor, "buyer": buyer},
         "invoice_meta": {
-            "invoice_number": f"INV-{invoice_date.year}-{rng.randint(1000, 9999)}",
+            "invoice_number": next_invoice_number(vendor["name"], invoice_date.year),
             "invoice_date": invoice_date.isoformat(),
             "due_date": due_date.isoformat(),
             "po_number": f"PO-{rng.randint(1000, 9999)}",
@@ -207,14 +298,12 @@ def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
             "grand_total": grand_total,
             "amount_in_words": None,
         },
+        # Banking details belong to the vendor, so they are looked up rather
+        # than regenerated. An invoice whose account number differs from the
+        # vendor's known one is exactly the fraud signal Phase 4 looks for,
+        # and that signal only exists if the normal case is stable.
         "payment_info": {
-            "bank_name": rng.choice(
-                ["HDFC Bank", "ICICI Bank", "State Bank of India", "Axis Bank"]
-            ),
-            "account_number": "".join(rng.choices(string.digits, k=14)),
-            "ifsc_or_swift": "".join(rng.choices(string.ascii_uppercase, k=4))
-            + "0"
-            + "".join(rng.choices(string.digits, k=6)),
+            **_PARTY_REGISTRY[vendor["name"]][2],
             "upi_id": None,
             "mode": None,
             "terms": None,
@@ -244,6 +333,9 @@ def main() -> int:
     schema = load_schema()
 
     n_ok = 0
+    reset_party_registry()
+    reset_price_registry()
+    reset_invoice_sequence()
     for i in range(args.count):
         r = rng.random()
         cum = 0.0

@@ -113,6 +113,8 @@ switch ($Task.ToLower()) {
         Invoke-Step @("scripts/run_rag_eval.py")
     }
 
+    "phase4" { Invoke-Step (@("scripts/run_validation_eval.py") + $Rest) }
+
     # ------------------------------------------------------------- fatura2
     "fatura2" {
         Invoke-Step (@("scripts/convert_fatura2.py", "--split", "test",
@@ -147,6 +149,7 @@ switch ($Task.ToLower()) {
         Write-Host "    ablation | ablation-smoke | extract-ablation"
         Write-Host "    phase3             RAG categorisation + anomaly detection"
         Write-Host "    phase3-ledger | phase3-eval"
+        Write-Host "    phase4             vendor resolution + record validation"
         Write-Host ""
         if ($Task -and $Task -ne "help") {
             Write-Host "Unknown task: $Task" -ForegroundColor Red

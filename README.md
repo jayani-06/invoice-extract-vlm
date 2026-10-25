@@ -62,6 +62,9 @@ make fatura2 && make fatura2-eval
 # Phase 3: RAG categorisation + anomaly detection
 make phase3
 
+# Phase 4: vendor resolution + record validation
+make phase4
+
 # Real OCR (PaddleOCR is already installed)
 make ablation ENGINE=paddle
 make extract-ablation OCR_SOURCE=engine
@@ -88,6 +91,8 @@ src/invoice_extract/
   rag/store.py              ledger retrieval (TF-IDF char n-grams) + vendor stats
   rag/categorize.py         retrieval-vote categorisation that abstains
   rag/anomaly.py            rule / statistical / semantic flags
+  rag/vendor_master.py      supplier file accreted from past invoices
+  rag/validate_vendor.py    vendor resolution + record validation
   models/base.py            extractor Protocol
   models/postprocess.py     date/amount/GSTIN parsing, arithmetic flags, coercion
   models/prompting.py       extraction schema, prompt, robust JSON recovery
@@ -102,12 +107,14 @@ scripts/                    download_*, convert_*, generate_synthetic_gst_invoic
                             build_image_corpus.py, make_pipeline_figure.py,
                             run_preprocess_ablation.py, run_extraction.py,
                             run_extraction_ablation.py, convert_fatura2.py,
-                            build_ledger.py, run_rag_eval.py
+                            build_ledger.py, run_rag_eval.py,
+                            run_validation_eval.py
 tests/                      pytest suite (347 tests)
 configs/compute_plan.md     Colab / Kaggle T4 inference plan, quantization decision
 docs/phase1_preprocessing.md  Phase 1 design, findings, how to run the ablation
 docs/phase2_extraction.md     Phase 2 design, results, honest limitations
 docs/phase3_rag.md            Phase 3 RAG enrichment, results, honest limitations
+docs/phase4_validation.md     Phase 4 vendor validation, results, honest limitations
 demo/                       Streamlit demo app + its README
 notebooks/                  Colab notebooks (incl. vlm_demo_outputs.ipynb)
 run.ps1                     Windows task runner (mirrors the Makefile)
@@ -195,10 +202,34 @@ by measuring: `unknown_vendor` rated medium dropped precision to 0.412, and
 duplicate detection could never fire because the history was keyed normalised
 and looked up raw. See `docs/phase3_rag.md`.
 
+**Phase 4 (done; both exit criteria met)** - a vendor master accreted from 100
+historical invoices, then held-out invoices resolved against it and validated.
+
+| Criterion | Target | Result |
+|---|---|---|
+| Vendor resolution accuracy | >= 0.95 | **1.000** |
+| False-positive rate (clean, known vendor) | < 0.10 | **0.000** |
+
+Vendor names are corrupted before resolution (upper-cased, spacing removed,
+truncated, reordered) because that is what the OCR stage produces. Three silent
+bugs surfaced only by measuring: rapidfuzz is case-sensitive by default, so
+"KRISHNA TEXTILES" scored 18.75 against "Krishna Textiles"; stripping legal
+suffixes merged "Arjun & Co" with "Arjun Pvt Ltd" and turned a clean invoice
+into a confident FAIL; and GSTIN-first resolution hid GSTIN fraud entirely by
+routing the invoice to the GSTIN's real owner. See `docs/phase4_validation.md`.
+
+**The corpus could not support Phase 4 as generated.** Vendor identity was
+re-rolled per invoice, so no supplier kept one GSTIN or bank account across
+their invoices (0/45), and prices swung 57% for the same vendor-item pair.
+Bank-account-change detection would have fired on every invoice ever issued.
+Identity is now a property of the company, prices are per-(vendor, item) with
++-4% jitter, and invoice numbers are a per-vendor sequence rather than a random
+draw that produced ~4 genuine collisions.
+
 **Still open**
 
 - **The VLM has never been run.** No GPU here.
-- **Phase 4 (vendor validation) not started**, nor Phase 5 (API/service layer).
+- **Phase 5 (API / service layer) not started.**
 - **No real *photographed* documents.** FATURA2 is third-party but still
   synthetic. SROIE (real photographed receipts) and CORD remain unconverted.
 - **FATURA2 has no line-item annotations** (its table is one placeholder

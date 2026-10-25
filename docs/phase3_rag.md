@@ -70,13 +70,19 @@ system should, which is evidence it is retrieving rather than memorising:
 | Configuration | Cat. accuracy | Coverage | Anomaly P | Anomaly R |
 |---|---|---|---|---|
 | 100-document ledger (baseline) | 1.000 | 1.000 | 1.000 | 1.000 |
-| 100-document, 60% anomaly rate | 1.000 | 1.000 | 1.000 | 1.000 |
-| 100-document, different seed | 1.000 | 1.000 | 0.947 | 1.000 |
-| **40-document ledger** | **0.977** | 0.981 | 0.978 | 1.000 |
-| **15-document ledger** | **0.934** | 0.987 | 1.000 | 1.000 |
+| 100-document, 60% anomaly rate | 0.993 | 1.000 | 1.000 | 1.000 |
+| 100-document, different seed | 1.000 | 1.000 | 1.000 | 1.000 |
+| **40-document ledger** | **0.981** | 0.994 | 1.000 | 1.000 |
+| **15-document ledger** | **0.962** | 0.974 | 1.000 | 1.000 |
 
 Less history, worse categorisation — a smooth curve, not a cliff. Anomaly
-precision stays ≥ 0.947 and recall at 1.000 throughout.
+precision and recall stay at 1.000 throughout.
+
+(An earlier run of this sweep reported anomaly precision as low as 0.40. That
+was not the detector: the generator drew invoice numbers from a 9,000-value
+range, so 150 documents contained ~4 genuine duplicates by birthday paradox and
+duplicate detection correctly flagged them. Invoice numbers are now a
+per-vendor sequence. The detector was right and the data was wrong.)
 
 ---
 

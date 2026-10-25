@@ -1,4 +1,4 @@
-.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	phase3 phase3-ledger phase3-eval \n	docker-build docker-up
+.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	phase3 phase3-ledger phase3-eval phase4 \n	docker-build docker-up
 
 install:
 	uv pip install --system -e .
@@ -146,3 +146,10 @@ phase3-eval:
 	python scripts/run_rag_eval.py --ledger $(LEDGER) --out reports/phase3_rag
 
 phase3: phase3-ledger phase3-eval
+
+# ------------------------------------------------------------------ phase 4
+
+# Build a vendor master from the historical split and validate held-out
+# invoices against it, with injected vendor fraud.
+phase4:
+	python scripts/run_validation_eval.py --corpus $(CORPUS) --out reports/phase4_validation
