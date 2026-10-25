@@ -45,5 +45,8 @@ data/processed/*/manifest.jsonl
 # Demo artifacts: rebuilt with `make demo-cache`, and the VLM payload
 # round-trips through Colab rather than living in the repo.
 demo_cache/
-vlm_payload.zip
 vlm_outputs.json
+
+# The Colab payload IS tracked (0.5 MB): the notebook clones the repo to
+# get it, which removes a manual file upload from the GPU run.
+!vlm_payload.zip
