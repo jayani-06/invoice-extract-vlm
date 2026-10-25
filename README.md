@@ -59,6 +59,9 @@ make extract-ablation
 # Third-party benchmark: 50 layouts we did not design
 make fatura2 && make fatura2-eval
 
+# Phase 3: RAG categorisation + anomaly detection
+make phase3
+
 # Real OCR (PaddleOCR is already installed)
 make ablation ENGINE=paddle
 make extract-ablation OCR_SOURCE=engine
@@ -81,6 +84,10 @@ src/invoice_extract/
   degrade/                  scan-artifact simulation (12 transforms, 4 profiles)
   preprocess/               8 toggleable OpenCV stages + the ablation pipeline
   ocr/                      engine-agnostic OCR (tesseract, paddle, oracle)
+  rag/taxonomy.py           chart of accounts + ground-truth item categories
+  rag/store.py              ledger retrieval (TF-IDF char n-grams) + vendor stats
+  rag/categorize.py         retrieval-vote categorisation that abstains
+  rag/anomaly.py            rule / statistical / semantic flags
   models/base.py            extractor Protocol
   models/postprocess.py     date/amount/GSTIN parsing, arithmetic flags, coercion
   models/prompting.py       extraction schema, prompt, robust JSON recovery
@@ -94,11 +101,13 @@ src/invoice_extract/
 scripts/                    download_*, convert_*, generate_synthetic_gst_invoices.py,
                             build_image_corpus.py, make_pipeline_figure.py,
                             run_preprocess_ablation.py, run_extraction.py,
-                            run_extraction_ablation.py, convert_fatura2.py
+                            run_extraction_ablation.py, convert_fatura2.py,
+                            build_ledger.py, run_rag_eval.py
 tests/                      pytest suite (347 tests)
 configs/compute_plan.md     Colab / Kaggle T4 inference plan, quantization decision
 docs/phase1_preprocessing.md  Phase 1 design, findings, how to run the ablation
 docs/phase2_extraction.md     Phase 2 design, results, honest limitations
+docs/phase3_rag.md            Phase 3 RAG enrichment, results, honest limitations
 demo/                       Streamlit demo app + its README
 notebooks/                  Colab notebooks (incl. vlm_demo_outputs.ipynb)
 run.ps1                     Windows task runner (mirrors the Makefile)
@@ -168,9 +177,28 @@ injected fake model but its generation call is unverified. See
   subtracted `discount_total` from a `subtotal` that already had it netted in.
   Warnings went from 46/150 and 150/150 to **0/150 and 0/150**.
 
+**Phase 3 (done; both exit criteria met)** - retrieval-based categorisation and
+a three-family anomaly detector over a 100-invoice historical ledger.
+
+| Criterion | Target | Result |
+|---|---|---|
+| Categorisation macro-F1 | >= 0.85 | **1.000** |
+| Anomaly recall | >= 0.90 | **1.000** |
+| Anomaly precision | >= 0.70 | **1.000** |
+
+The scores are treated as a warning rather than a win: three accounts and ten
+item types is a small label space, and recall is measured against anomalies we
+injected ourselves. A sensitivity sweep shows categorisation degrading smoothly
+as the ledger shrinks (1.000 at 100 documents, 0.977 at 40, 0.934 at 15), which
+is evidence it genuinely retrieves rather than memorises. Two bugs surfaced only
+by measuring: `unknown_vendor` rated medium dropped precision to 0.412, and
+duplicate detection could never fire because the history was keyed normalised
+and looked up raw. See `docs/phase3_rag.md`.
+
 **Still open**
 
 - **The VLM has never been run.** No GPU here.
+- **Phase 4 (vendor validation) not started**, nor Phase 5 (API/service layer).
 - **No real *photographed* documents.** FATURA2 is third-party but still
   synthetic. SROIE (real photographed receipts) and CORD remain unconverted.
 - **FATURA2 has no line-item annotations** (its table is one placeholder

@@ -105,6 +105,14 @@ switch ($Task.ToLower()) {
                        "--out", "reports/phase2_ablation") + $Rest)
     }
 
+    # ------------------------------------------------------------- phase 3
+    "phase3-ledger" { Invoke-Step (@("scripts/build_ledger.py") + $Rest) }
+    "phase3-eval"   { Invoke-Step (@("scripts/run_rag_eval.py") + $Rest) }
+    "phase3" {
+        Invoke-Step @("scripts/build_ledger.py")
+        Invoke-Step @("scripts/run_rag_eval.py")
+    }
+
     # ------------------------------------------------------------- fatura2
     "fatura2" {
         Invoke-Step (@("scripts/convert_fatura2.py", "--split", "test",
@@ -137,6 +145,8 @@ switch ($Task.ToLower()) {
         Write-Host ""
         Write-Host "  Experiments" -ForegroundColor White
         Write-Host "    ablation | ablation-smoke | extract-ablation"
+        Write-Host "    phase3             RAG categorisation + anomaly detection"
+        Write-Host "    phase3-ledger | phase3-eval"
         Write-Host ""
         if ($Task -and $Task -ne "help") {
             Write-Host "Unknown task: $Task" -ForegroundColor Red

@@ -1,4 +1,4 @@
-.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	docker-build docker-up
+.PHONY: install dev-install ocr-install lint format test validate-schema eval-smoke \n	corpus corpus-full ablation ablation-smoke figure phase1 \n	extract extract-ablation phase2 fatura2 fatura2-audit fatura2-eval \n	demo demo-cache demo-cache-fast demo-vlm-payload demo-vlm-merge \n	phase3 phase3-ledger phase3-eval \n	docker-build docker-up
 
 install:
 	uv pip install --system -e .
@@ -131,3 +131,18 @@ demo-vlm-merge:
 
 demo:
 	streamlit run demo/app.py
+
+# ------------------------------------------------------------------ phase 3
+
+LEDGER ?= data/processed/ledger
+
+# Split the corpus into a historical ledger and an evaluation set. The eval
+# set's item descriptions are deliberately rewritten, so retrieval cannot
+# succeed by exact string match.
+phase3-ledger:
+	python scripts/build_ledger.py --corpus $(CORPUS) --out $(LEDGER)
+
+phase3-eval:
+	python scripts/run_rag_eval.py --ledger $(LEDGER) --out reports/phase3_rag
+
+phase3: phase3-ledger phase3-eval
