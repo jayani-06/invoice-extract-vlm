@@ -19,6 +19,9 @@ dependencies = [
     "tqdm>=4.66",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
+    # Phase 3: TfidfRetriever is the default retriever and imports
+    # sklearn unguarded, so this is core, not optional.
+    "scikit-learn>=1.4",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +41,15 @@ ocr = [
     "pytesseract>=0.3.10",
     "pdf2image>=1.17",
     "PyMuPDF>=1.24",
+]
+demo = [
+    # Phase 2.5: the Streamlit walkthrough in demo/app.py. Needed to show the
+    # demo, not to compute anything -- the cache builder runs without it.
+    "streamlit>=1.35",
+]
+datasets = [
+    # scripts/convert_fatura2.py reads the Hugging Face parquet mirror.
+    "pyarrow>=16.0",
 ]
 paddle = [
     "paddleocr>=2.7",

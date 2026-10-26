@@ -38,7 +38,8 @@ This repo is deliberately sequenced so nothing downstream gets built on sand:
 ```bash
 # Environment
 uv venv && source .venv/bin/activate   # or: python -m venv .venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e ".[dev,ocr,demo,datasets]"
+uv pip install paddleocr paddlepaddle   # Phase 1 OCR engine; see note below
 pre-commit install
 
 # Verify schema + harness end to end (no external data, no OCR engine needed)
@@ -65,7 +66,7 @@ make phase3
 # Phase 4: vendor resolution + record validation
 make phase4
 
-# Real OCR (PaddleOCR is already installed)
+# Real OCR
 make ablation ENGINE=paddle
 make extract-ablation OCR_SOURCE=engine
 
@@ -73,6 +74,25 @@ make extract-ablation OCR_SOURCE=engine
 make demo-cache        # once, ~4 min: precomputes OCR + extraction
 make demo              # opens the 5-screen walkthrough
 ```
+
+### What each extra is for
+
+The core install runs the schema, the harness, Phase 3 and Phase 4. Everything
+that touches pixels or third-party data sits behind an extra, because a missing
+one otherwise surfaces as an `ImportError` several minutes into a long run.
+
+| Extra | Needed for |
+|---|---|
+| `dev` | `make test`, `make lint`, pre-commit |
+| `ocr` | the renderer, the degradation profiles, `make corpus-full`, every Phase 1 target |
+| `demo` | `make demo` (Streamlit). `make demo-cache` runs without it |
+| `datasets` | `make fatura2` (reads the Hugging Face parquet mirror) |
+| `vlm` | Colab/Kaggle inference only — do not install locally, it pulls torch |
+
+`paddleocr` and `paddlepaddle` are listed as the `paddle` extra but are better
+installed directly: the pinned resolver in `uv` often cannot satisfy them
+alongside the rest, and they are the one dependency a CPU-only machine may
+legitimately skip (`--engine oracle` substitutes gold text).
 
 ## Layout
 
