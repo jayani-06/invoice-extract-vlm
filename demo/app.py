@@ -170,6 +170,44 @@ def load_knowledge():
     }
 
 
+#: Plain-English name, the measured verdict, and how to colour it. Keyed by the
+#: internal config id so a cache built with a different ladder simply shows
+#: fewer options rather than crashing.
+CLEANUP_LABELS: dict[str, tuple[str, str, str]] = {
+    "raw": (
+        "Nothing — raw scan",
+        "No cleanup. This is the baseline every other option is measured against.",
+        "neutral",
+    ),
+    "gray+border": (
+        "Crop the scanner frame",
+        "Removes the dark border a flatbed leaves. Small, safe, rarely harmful.",
+        "neutral",
+    ),
+    "gray+border+deskew": (
+        "+ straighten the page",
+        "Straightening is worth +11 points of word accuracy on heavily damaged "
+        "pages — OCR reads a crooked page fine, but reports the wrong location, "
+        "and location is what tells you which field a number belongs to.",
+        "good",
+    ),
+    "full(no-binarize)": (
+        "+ fix lighting and denoise  (recommended)",
+        "The best setting measured: +14 points of word accuracy on heavy damage "
+        "with the mobile models, +22 with the larger ones.",
+        "good",
+    ),
+    "full+sauvola": (
+        "+ force pure black & white  (measured to HURT)",
+        "This is the worst configuration in every column we measured, and the "
+        "page on the right shows why. It is kept selectable because the result "
+        "is a genuine finding — see screen 6 — not because you should use it.",
+        "bad",
+    ),
+}
+
+RECOMMENDED_CLEANUP = "full(no-binarize)"
+
 SEVERITY_COLOUR = {"high": "bad", "medium": "bad", "low": "muted"}
 VERDICT_COLOUR = {"PASS": "ok", "REVIEW": "muted", "FAIL": "bad"}
 
@@ -240,16 +278,36 @@ if screen.startswith("1"):
             value="medium" if "medium" in doc["profiles"] else doc["profiles"][0],
         )
     with col_b:
-        config = st.selectbox("Cleanup applied", index["demo_configs"], index=3)
+        # Plain-English labels with the measured verdict attached. The internal
+        # config ids meant nothing to anyone watching, so the natural move --
+        # pick the last and most thorough-sounding option -- produced a visibly
+        # ruined page with the explanation two screens away.
+        available = [c for c in index["demo_configs"] if c in CLEANUP_LABELS]
+        config = st.selectbox(
+            "Cleanup applied",
+            available,
+            index=available.index(RECOMMENDED_CLEANUP) if RECOMMENDED_CLEANUP in available else 0,
+            format_func=lambda c: CLEANUP_LABELS[c][0],
+        )
+
+    headline, verdict, tone = CLEANUP_LABELS[config]
+    if tone == "bad":
+        st.error(verdict)
+    elif tone == "good":
+        st.success(verdict)
+    else:
+        st.info(verdict)
 
     left, right = st.columns(2)
     with left:
         st.markdown("### Scanned input")
+        st.caption(f"`{profile}` damage, straight from the scanner")
         img = image_for(doc, profile)
         if img:
             st.image(img, use_container_width=True)
     with right:
-        st.markdown(f"### After cleanup: `{config}`")
+        st.markdown("### After cleanup")
+        st.caption(f"`{config}`")
         img = image_for(doc, f"{profile}__{config}")
         if img:
             st.image(img, use_container_width=True)
@@ -257,11 +315,25 @@ if screen.startswith("1"):
             not_run(f"no cached preprocessing for {profile} / {config}")
 
     st.markdown("---")
+    st.markdown("**What each option does, and what it costs**")
     st.markdown(
-        "**What the stages do** — `gray+border` whitens the dark scanner frame, "
-        "`deskew` straightens the page, `full(no-binarize)` adds lighting correction "
-        "and denoising, `full+sauvola` additionally forces pure black-and-white. "
-        "That last one measurably *hurts* modern OCR — see screen 5."
+        chr(10).join(
+            [
+                "| Option | What it does | Measured effect |",
+                "|---|---|---|",
+                "| Nothing | the raw scan | the baseline everything else is compared to |",
+                "| Crop the scanner frame | whitens the dark border a flatbed leaves | small, safe |",
+                "| + straighten the page | rotates the page upright | **+11 points** of word accuracy on heavy damage |",
+                "| + fix lighting and denoise | evens out shadows, removes grain | **+14 points** on heavy — the best measured setting |",
+                "| + force pure black & white | hard-thresholds every pixel | **worst row in every column.** Shown because the result is real, not because it is a good idea |",
+            ]
+        )
+    )
+    st.caption(
+        "Forcing black-and-white is the classic scanning recipe and it is wrong "
+        "here: PaddleOCR's detector is trained on continuous-tone photographs, so "
+        "throwing the greyscale away removes exactly what it uses. This is a "
+        "finding, which is why the option is still selectable."
     )
 
 # ------------------------------------------------------------------ 2. read
