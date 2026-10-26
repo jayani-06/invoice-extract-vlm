@@ -156,6 +156,12 @@ def main(argv: list[str] | None = None) -> int:
         "reference, never an OCR baseline -- reports are watermarked as such.",
     )
     ap.add_argument("--oracle-error-rate", type=float, default=0.0)
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Recompute cells already present in the output. Without it, an "
+        "interrupted sweep resumes where it stopped.",
+    )
     args = ap.parse_args(argv)
 
     if args.engine == "oracle" and not args.allow_oracle:
@@ -207,15 +213,84 @@ def main(argv: list[str] | None = None) -> int:
     for row in manifest:
         by_profile[row["profile"]].append(row)
 
+    args.out.mkdir(parents=True, exist_ok=True)
+    results_path = args.out / "results.json"
+
+    # Resume. A full sweep is 12 cells of real OCR and takes an hour and a
+    # half; two of them were killed by session teardown and wrote nothing at
+    # all, because results.json was only written at the very end. Cells are now
+    # flushed as they complete and reloaded on the next run.
     results: list[dict] = []
+    elapsed_before = 0.0
+    if results_path.exists() and not args.force:
+        try:
+            previous = json.loads(results_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            # A sweep killed mid-write leaves truncated JSON. Starting over is
+            # correct; silently continuing against a half-parsed file is not.
+            print(f"{results_path} is unreadable; starting over", file=sys.stderr)
+            previous = {}
+        else:
+            # Only reuse cells measured the same way. An engine or IoU change
+            # makes old cells incomparable, and mixing them in one table is
+            # worse than recomputing -- the table would silently describe two
+            # different experiments.
+            same_setup = (
+                previous.get("engine") == args.engine
+                and previous.get("engine_kwargs") == engine_kwargs
+                and previous.get("iou_threshold") == args.iou
+                and previous.get("corpus") == str(args.corpus)
+            )
+            if same_setup:
+                results = list(previous.get("results") or [])
+                # Carry the earlier wall clock forward, or a resumed sweep
+                # reports only the time the final attempt took and the cost of
+                # the experiment looks far lower than it was.
+                elapsed_before = float(previous.get("elapsed_s") or 0.0)
+            elif previous.get("results"):
+                print(
+                    "Existing results used a different engine, corpus or IoU; "
+                    "recomputing all cells.",
+                    file=sys.stderr,
+                )
+
     started = time.time()
     total_cells = len(configs) * len(profiles)
     cell = 0
+    done = {(r["config"], r["profile"]) for r in results}
+    if done:
+        print(f"Resuming: {len(done)} of {total_cells} cells already measured", file=sys.stderr)
+
+    def flush() -> None:
+        """Write every completed cell. Called after each one, so a kill costs
+        the cell in flight rather than the whole sweep."""
+        results_path.write_text(
+            json.dumps(
+                {
+                    "engine": args.engine,
+                    "engine_kwargs": engine_kwargs,
+                    "corpus": str(args.corpus),
+                    "iou_threshold": args.iou,
+                    "elapsed_s": round(elapsed_before + time.time() - started, 1),
+                    "is_oracle": args.engine == "oracle",
+                    "complete": len(results) == total_cells,
+                    "results": results,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     for name in configs:
         pipeline = make_pipeline(name)
         for profile in profiles:
             cell += 1
+            if (name, profile) in done:
+                print(
+                    f"[{cell}/{total_cells}] {name:<34} {profile:<7} cached",
+                    file=sys.stderr,
+                )
+                continue
             rows = by_profile.get(profile, [])
             if args.limit:
                 rows = rows[: args.limit]
@@ -264,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
             agg = aggregate_ocr(reports)
             record = {"config": name, "profile": profile, "n_docs": agg.n_docs, **agg.as_dict()}
             results.append(record)
+            flush()
             print(
                 f"[{cell}/{total_cells}] {name:<34} {profile:<7} "
                 f"CER={fmt(agg.cer_norm, 4)} WER={fmt(agg.wer_norm, 4)} "
@@ -272,19 +348,14 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    (args.out / "results.json").write_text(
-        json.dumps(
-            {
-                "engine": args.engine,
-                "engine_kwargs": engine_kwargs,
-                "corpus": str(args.corpus),
-                "iou_threshold": args.iou,
-                "elapsed_s": round(time.time() - started, 1),
-                "is_oracle": args.engine == "oracle",
-                "results": results,
-            },
-            indent=2,
+    flush()
+
+    # Tables are regenerated from whatever is on disk, so an interrupted sweep
+    # still produces a readable report for the cells it did finish.
+    results.sort(
+        key=lambda r: (
+            configs.index(r["config"]) if r["config"] in configs else 99,
+            profiles.index(r["profile"]) if r["profile"] in profiles else 99,
         )
     )
 

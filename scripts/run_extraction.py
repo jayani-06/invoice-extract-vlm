@@ -173,14 +173,14 @@ def main(argv: list[str] | None = None) -> int:
     preprocess = None
     if args.ocr_source == "engine" and not args.replay:
         from invoice_extract.ocr.base import OcrEngineUnavailableError, get_engine
-        from invoice_extract.preprocess.pipeline import Pipeline, get_config
+        from invoice_extract.preprocess.pipeline import make_pipeline
 
         try:
             ocr_engine = get_engine(args.ocr_engine)
         except OcrEngineUnavailableError as exc:
             print(f"\nOCR engine unavailable:\n{exc}\n", file=sys.stderr)
             return 3
-        preprocess = Pipeline(get_config(args.preprocess_config))
+        preprocess = make_pipeline(args.preprocess_config)
 
     extractor_kwargs: dict = {}
     if args.extractor.startswith("vlm"):

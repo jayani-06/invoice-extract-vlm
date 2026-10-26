@@ -42,6 +42,16 @@ ocr = [
     "pdf2image>=1.17",
     "PyMuPDF>=1.24",
 ]
+rag = [
+    # Phase 3's complete retrieve-augment-generate path: a sentence encoder for
+    # dense retrieval and a small instruction-tuned LLM for the generation
+    # step. Both run on CPU. The TF-IDF retriever and the weighted-vote
+    # categoriser are core and need none of this -- these are the dense and
+    # generated variants the plan called for, kept optional because they pull
+    # torch.
+    "torch>=2.3",
+    "transformers>=4.42",
+]
 demo = [
     # Phase 2.5: the Streamlit walkthrough in demo/app.py. Needed to show the
     # demo, not to compute anything -- the cache builder runs without it.

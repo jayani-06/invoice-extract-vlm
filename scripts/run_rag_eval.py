@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from invoice_extract.rag.anomaly import detect_anomalies, normalize_invoice_number  # noqa: E402
 from invoice_extract.rag.categorize import categorize_line_item  # noqa: E402
-from invoice_extract.rag.store import LedgerEntry, TfidfRetriever, VendorStats  # noqa: E402
+from invoice_extract.rag.store import LedgerEntry, VendorStats  # noqa: E402
 from invoice_extract.rag.taxonomy import account_name  # noqa: E402
 
 #: Which injected anomaly each flag code is evidence for. A document counts as
@@ -76,6 +76,22 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=5, help="Neighbours retrieved per line item")
     ap.add_argument("--out", type=Path, default=Path("reports/phase3_rag"))
     ap.add_argument(
+        "--retriever",
+        default="tfidf",
+        choices=["tfidf", "dense"],
+        help="tfidf = character n-grams (the measured floor). dense = sentence "
+        "embeddings, which is what the Phase 3 plan called for.",
+    )
+    ap.add_argument(
+        "--categoriser",
+        default="vote",
+        choices=["vote", "rag"],
+        help="vote = similarity-weighted neighbour vote. rag = an LLM reading the "
+        "retrieved context and deciding, which is the generation step the plan "
+        "describes and the vote is the control for.",
+    )
+    ap.add_argument("--generator-model", default=None, help="Override the LLM checkpoint")
+    ap.add_argument(
         "--today",
         default="2026-09-20",
         help="Reference date for the future-date rule. Fixed by default so the "
@@ -92,7 +108,32 @@ def main(argv: list[str] | None = None) -> int:
     today = date.fromisoformat(args.today)
 
     entries = [LedgerEntry(**e) for e in ledger["entries"]]
-    retriever = TfidfRetriever()
+
+    from invoice_extract.rag.embed import EmbeddingModelUnavailableError, get_retriever
+
+    try:
+        retriever = get_retriever(args.retriever)
+    except EmbeddingModelUnavailableError as exc:
+        # Never fall back silently. A run that quietly used TF-IDF while the
+        # report said "dense" is the most expensive kind of mistake this
+        # project can make, and it has made the equivalent one before.
+        print(f"Retriever unavailable: {exc}", file=sys.stderr)
+        return 3
+
+    generator = None
+    if args.categoriser == "rag":
+        from invoice_extract.rag.generate import GeneratorUnavailableError, get_generator
+
+        kwargs = {"model_name": args.generator_model} if args.generator_model else {}
+        try:
+            generator = get_generator("local", **kwargs)
+            # Load now rather than on the first line item, so an unavailable
+            # model fails before the run reports partial numbers.
+            generator._ensure_loaded()
+        except GeneratorUnavailableError as exc:
+            print(f"Generator unavailable: {exc}", file=sys.stderr)
+            return 3
+
     t0 = time.perf_counter()
     retriever.index(entries)
     index_ms = (time.perf_counter() - t0) * 1000
@@ -137,9 +178,16 @@ def main(argv: list[str] | None = None) -> int:
         ):
             gold = truth["category"]
             t = time.perf_counter()
-            decision = categorize_line_item(
-                item, retriever, vendor=vendor, k=args.k, vendor_stats=stats
-            )
+            if generator is not None:
+                from invoice_extract.rag.generate import categorize_line_item_rag
+
+                decision = categorize_line_item_rag(
+                    item, retriever, generator, vendor=vendor, k=args.k, vendor_stats=stats
+                )
+            else:
+                decision = categorize_line_item(
+                    item, retriever, vendor=vendor, k=args.k, vendor_stats=stats
+                )
             cat_ms += (time.perf_counter() - t) * 1000
 
             n_items += 1
@@ -233,6 +281,11 @@ def main(argv: list[str] | None = None) -> int:
         "categorization": {
             "accuracy_all_items": accuracy_all,
             "accuracy_on_covered": accuracy_covered,
+            "retriever": args.retriever,
+            "categoriser": args.categoriser,
+            "generator_model": (
+                getattr(generator, "model_name", None) if generator is not None else None
+            ),
             "coverage": coverage,
             "abstentions": n_abstain,
             "macro_f1": macro_f1,
