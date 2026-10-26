@@ -40,6 +40,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from invoice_extract.rag.taxonomy import category_of  # noqa: E402
 
+#: Assigned Indian GST state codes, mirrored from the generator. Kept as a
+#: literal rather than imported so this script does not depend on
+#: scripts/generate_synthetic_gst_invoices.py importing cleanly.
+GST_STATE_CODES = ("29", "33", "27", "07", "19", "24")
+
 #: Surface rewrites a real vendor might apply to the same item.
 ABBREVIATIONS = {
     "Copier Paper": "COPIER PPR",
@@ -99,6 +104,13 @@ ANOMALY_KINDS = (
     "invalid_gst_rate",
     "future_invoice_date",
     "corrupt_gstin",
+    # --- Scenarios the detectors were NOT designed for -------------------
+    # Added deliberately after Phase 3 and 4 both scored perfectly against
+    # anomalies we had written the detectors to catch. A detector evaluated
+    # only on its own design brief measures nothing. These two are held out:
+    # if they are missed, that is the honest result and gets reported.
+    "line_item_padding",
+    "gstin_state_contradicts_address",
 )
 
 
@@ -134,6 +146,37 @@ def inject(doc: dict, kind: str, rng: random.Random, donor: dict | None) -> dict
             return None
         year = int(str(meta["invoice_date"])[:4])
         meta["invoice_date"] = f"{year + 3}{str(meta['invoice_date'])[4:]}"
+
+    elif kind == "line_item_padding":
+        # One line's quantity x unit_price no longer matches its line_total,
+        # but subtotal and grand_total are adjusted so the INVOICE still
+        # reconciles. Document-level arithmetic passes; only a per-line check
+        # can see it. This is how padding actually hides.
+        items = doc.get("line_items") or []
+        if not items:
+            return None
+        item = rng.choice(items)
+        if item.get("line_total") is None or item.get("quantity") is None:
+            return None
+        uplift = round(item["line_total"] * rng.uniform(0.3, 0.8), 2)
+        item["line_total"] = round(item["line_total"] + uplift, 2)
+        totals_block = doc.setdefault("totals", {})
+        for key in ("subtotal", "grand_total"):
+            if totals_block.get(key) is not None:
+                totals_block[key] = round(totals_block[key] + uplift, 2)
+
+    elif kind == "gstin_state_contradicts_address":
+        # First two GSTIN digits are the state code. A Karnataka address with
+        # a Maharashtra GSTIN is either a keying error or a fabricated number.
+        # Nothing in the pipeline currently cross-checks the two.
+        vendor = (doc.get("parties") or {}).get("vendor") or {}
+        gstin = vendor.get("gstin")
+        if not gstin or len(gstin) != 15:
+            return None
+        others = [c for c in GST_STATE_CODES if c != gstin[:2]]
+        if not others:
+            return None
+        vendor["gstin"] = rng.choice(others) + gstin[2:]
 
     elif kind == "corrupt_gstin":
         vendor = (doc.get("parties") or {}).get("vendor") or {}

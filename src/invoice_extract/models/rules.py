@@ -67,6 +67,16 @@ _NOISE_LINES = re.compile(
     re.IGNORECASE,
 )
 
+#: Document-type banners, matched anywhere in a line rather than only as a
+#: whole line. Reading order merges a right-aligned title with a left-aligned
+#: vendor name onto one visual row, so the banner has to be cut out of the
+#: middle of a line, not used to discard it.
+_BANNER = re.compile(
+    r"\b(tax\s+invoice|bill\s+of\s+supply|original\s+for\s+recipient"
+    r"|duplicate\s+for\s+transporter|triplicate\s+for\s+supplier|invoice|receipt)\b",
+    re.IGNORECASE,
+)
+
 
 def _last_amount(text: str) -> float | None:
     """Rightmost money-shaped token on a line.
@@ -174,13 +184,25 @@ class RuleBasedExtractor:
 
         # The vendor name is the first substantive line: letterheads lead with
         # it, and the only things above it are document-type banners.
+        #
+        # The banner is *stripped*, not used to skip the line. A right-aligned
+        # "TAX INVOICE" title sits on the same visual row as a left-aligned
+        # vendor name, so reading order merges them into
+        # "TAX INVOICE Meera & Co" -- one line, not two. Skipping whole banner
+        # lines left the title glued to the name, which then failed vendor
+        # resolution in Phase 4 at 54% similarity.
         vendor_name = None
-        for line in lines[:8]:
-            if _NOISE_LINES.match(line) or _GSTIN_ANYWHERE.search(line):
+        vendor_line_index = None
+        for i, line in enumerate(lines[:8]):
+            if _GSTIN_ANYWHERE.search(line):
                 continue
-            if sum(c.isalpha() for c in line) >= 4:
-                vendor_name = line
-                break
+            candidate = _BANNER.sub(" ", line).strip(" -|:")
+            candidate = re.sub(r"\s{2,}", " ", candidate)
+            if not candidate or sum(c.isalpha() for c in candidate) < 4:
+                continue
+            vendor_name = candidate
+            vendor_line_index = i
+            break
 
         vendor: dict[str, Any] = {"name": vendor_name}
         if gstins:
@@ -189,8 +211,11 @@ class RuleBasedExtractor:
         # The address is the run of lines between the vendor name and the first
         # labelled field, joined back together -- letterhead addresses wrap
         # across two or three lines and only make sense reassembled.
-        if vendor_name is not None:
-            start = lines.index(vendor_name) + 1
+        if vendor_line_index is not None:
+            # Index, not `lines.index(vendor_name)`: the name has had its
+            # document-type banner stripped, so it no longer appears verbatim
+            # in `lines` and the lookup would raise.
+            start = vendor_line_index + 1
             address_lines: list[str] = []
             for entry in lines[start : start + 4]:
                 if re.search(

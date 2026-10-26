@@ -326,6 +326,14 @@ def check_arithmetic(doc: dict[str, Any], tolerance: float = 0.02) -> Consistenc
             and not close(qty * price - (li.get("discount") or 0.0), total)
             and not close(qty * price, total)
             and not close(qty * price + (li.get("tax_amount") or 0.0), total)
+            # When no discount was read off the page, a line total *below*
+            # quantity x unit_price is exactly what an unread discount looks
+            # like, and we cannot tell the two apart. Only a total that
+            # EXCEEDS quantity x unit_price is unexplainable, so only that is
+            # flagged. Without this, every discounted invoice raised a false
+            # arithmetic error whenever the extractor missed the discount
+            # column -- which it does whenever the invoice does not print one.
+            and not (li.get("discount") is None and total < qty * price)
         ):
             problems.append(
                 f"line_items[{i}]: quantity*unit_price-discount="

@@ -117,6 +117,57 @@ class TestBuiltCache:
         assert "has_vlm" in index and "ocr_engine" in index
         assert isinstance(index["documents"], list) and index["documents"]
 
+    def test_the_cache_is_not_stale(self, index):
+        """A cache older than the corpus shows numbers from documents that no
+        longer exist, and nothing in the UI reveals it.
+
+        This happened: the cache sat two corpus regenerations behind (the
+        line_total convention, then vendor identity and prices) while the demo
+        displayed it as current. Skipping when the cache is absent is fine;
+        passing quietly when it is present and stale is not.
+        """
+        import datetime
+        import glob
+
+        canonical = glob.glob(
+            str(
+                Path(__file__).resolve().parents[1]
+                / "data/processed/gst_in_synthetic/canonical/*.json"
+            )
+        )
+        if not canonical:
+            pytest.skip("corpus not built, nothing to be stale against")
+
+        newest_source = max(Path(p).stat().st_mtime for p in canonical)
+        built_at = datetime.datetime.strptime(index["built_at"], "%Y-%m-%d %H:%M:%S").timestamp()
+
+        assert built_at >= newest_source, (
+            f"demo cache was built {index['built_at']} but the corpus changed at "
+            f"{datetime.datetime.fromtimestamp(newest_source):%Y-%m-%d %H:%M:%S}. "
+            "Rebuild it: python scripts/build_demo_cache.py"
+        )
+
+    def test_vlm_results_match_the_current_prompt(self, index):
+        """Merged VLM output must come from the prompt the repo currently ships.
+
+        Qwen2-VL-2B copied the template's placeholder `123.45` in 8/8 responses
+        before that was fixed. Those responses stayed in the cache afterwards
+        and the demo kept displaying the depressed scores as if current.
+        """
+        if not index.get("has_vlm"):
+            pytest.skip("no VLM results merged")
+        for entry in index["documents"]:
+            doc = json.loads(
+                (CACHE / "docs" / f"{entry['doc_id']}.json").read_text(encoding="utf-8")
+            )
+            for name, extraction in doc["extractions"].items():
+                if not name.startswith("vlm:"):
+                    continue
+                assert "123.45" not in (extraction.get("raw_response") or ""), (
+                    f"{entry['doc_id']}: VLM output is from the superseded prompt. "
+                    "Re-run the Colab notebook and re-merge, or delete these results."
+                )
+
     def test_every_indexed_document_has_a_detail_file(self, index):
         for entry in index["documents"]:
             assert (CACHE / "docs" / f"{entry['doc_id']}.json").exists(), entry["doc_id"]

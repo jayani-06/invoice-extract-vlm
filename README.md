@@ -108,13 +108,14 @@ scripts/                    download_*, convert_*, generate_synthetic_gst_invoic
                             run_preprocess_ablation.py, run_extraction.py,
                             run_extraction_ablation.py, convert_fatura2.py,
                             build_ledger.py, run_rag_eval.py,
-                            run_validation_eval.py
+                            run_validation_eval.py, build_ledger.py
 tests/                      pytest suite (347 tests)
 configs/compute_plan.md     Colab / Kaggle T4 inference plan, quantization decision
 docs/phase1_preprocessing.md  Phase 1 design, findings, how to run the ablation
 docs/phase2_extraction.md     Phase 2 design, results, honest limitations
 docs/phase3_rag.md            Phase 3 RAG enrichment, results, honest limitations
 docs/phase4_validation.md     Phase 4 vendor validation, results, honest limitations
+docs/limitations.md           everything the project has NOT established, in one place
 demo/                       Streamlit demo app + its README
 notebooks/                  Colab notebooks (incl. vlm_demo_outputs.ipynb)
 run.ps1                     Windows task runner (mirrors the Makefile)
@@ -156,11 +157,11 @@ benchmark:
 
 | Corpus | Header accuracy (rules baseline) |
 |---|---|
-| Our synthetic invoices (150 docs) | **0.983** |
+| Our synthetic invoices (150 docs) | **1.000** |
 | FATURA2 (300 docs, 50 unseen layouts) | **0.559** |
 
-A 42-point drop, reproducing FATURA's central claim on our own baseline.
-`vendor.name` collapses from 0.900 to **0.000** - worse than predicting nothing.
+A 44-point drop, reproducing FATURA's central claim on our own baseline.
+`vendor.name` collapses from 1.000 to **0.000** - worse than predicting nothing.
 So the regex baseline saturates *our* corpus, not the task, and there is a
 large measurable gap for a VLM to close. **The VLM itself has never been run** -
 there is no GPU on this machine, so `models/vlm.py` is unit-tested through an
@@ -225,6 +226,12 @@ Bank-account-change detection would have fired on every invoice ever issued.
 Identity is now a property of the company, prices are per-(vendor, item) with
 +-4% jitter, and invoice numbers are a per-vendor sequence rather than a random
 draw that produced ~4 genuine collisions.
+
+**Known gaps are catalogued in `docs/limitations.md`** rather than scattered
+across the phase docs. Two anomaly scenarios are deliberately held out and
+currently **missed entirely** (0/4 and 0/3), which drops Phase 3 recall from
+1.000 to 0.800 — that is the honest measure of a detector, and they are kept
+unfixed as a permanent probe.
 
 **Still open**
 

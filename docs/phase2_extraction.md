@@ -15,7 +15,7 @@ date, grand total); ≥ 80% F1 on line items.
 | Extractor | Header accuracy | Line-item F1 | Critical-fields | Macro field acc |
 |---|---|---|---|---|
 | `null` (predicts nothing) | 0.000 | n/a | 0.000 | 0.225 |
-| `rules` (OCR + regex) | **0.983** | **0.998** | 0.900 | 0.918 |
+| `rules` (OCR + regex) | **1.000** | **1.000** | 1.000 | 0.925 |
 
 **On FATURA2** (300 documents, 50 unseen layouts, third-party, CC-BY-4.0):
 
@@ -31,13 +31,13 @@ Per field, the collapse is not uniform — and where it lands is the whole story
 | `totals.grand_total` | 1.000 | 1.000 | **0.000** |
 | `invoice_meta.invoice_number` | 1.000 | 0.667 | −0.333 |
 | `invoice_meta.invoice_date` | 1.000 | 0.570 | −0.430 |
-| `parties.vendor.name` | 0.900 | **0.000** | **−0.900** |
-| **Header accuracy** | **0.983** | **0.559** | **−0.424** |
+| `parties.vendor.name` | 1.000 | **0.000** | **−1.000** |
+| **Header accuracy** | **1.000** | **0.559** | **−0.441** |
 
 ### What this means
 
 The regex baseline meets both exit criteria on our corpus and **fails badly on
-a third-party one — a 42-point drop in header accuracy.** This reproduces
+a third-party one — a 44-point drop in header accuracy.** This reproduces
 FATURA's central claim (ref [6]) on our own baseline: template-tuned extraction
 collapses on unseen layouts.
 
@@ -49,10 +49,11 @@ Read field by field, the mechanism is clear:
 - **`invoice_date` and `invoice_number` degrade (−0.43, −0.33)** because the
   label vocabulary widens: "Date" vs "Invoice Date" vs "Date of Issue", and
   date formats our generator never produced.
-- **`vendor.name` goes to zero.** This is the sharpest result in the phase. Our
-  rule takes the first substantive line of the page, which is correct on every
-  invoice we render and wrong on essentially every FATURA layout, where the
-  vendor name sits beside a logo block partway down the page. **The `null`
+- **`vendor.name` goes from 1.000 to zero.** This is the sharpest result in the
+  phase. Our rule takes the first substantive line of the page, stripped of any
+  document-type banner. That is correct on *every* invoice we render and wrong
+  on essentially every FATURA layout, where the vendor name sits beside a logo
+  block partway down the page. **The `null`
   extractor scores 0.333 on this field** (33% of FATURA2 documents have no
   vendor annotation, and null-vs-null counts as correct), so the rules baseline
   is *worse than predicting nothing* — the clearest possible demonstration that
@@ -252,7 +253,7 @@ python scripts/run_extraction_ablation.py --corpus data/processed/gst_in_synthet
 - **Nothing about multi-page documents.** One page per document; the page
   retrieval step from refs [3] and [4] is untouched.
 - **The rules baseline is tuned to a renderer we wrote**, and FATURA2 now
-  quantifies exactly how much that flattered it: 0.983 on home turf, 0.559 on
+  quantifies exactly how much that flattered it: 1.000 on home turf, 0.559 on
   unseen layouts. Treat any number measured only on the synthetic corpus as an
   upper bound, not an estimate.
 

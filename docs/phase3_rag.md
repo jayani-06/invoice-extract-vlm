@@ -17,10 +17,15 @@ precision ≥ 0.70.
 
 | Criterion | Target | Result | |
 |---|---|---|---|
-| Categorisation macro-F1 | ≥ 0.85 | **1.000** | met |
-| Anomaly recall | ≥ 0.90 | **1.000** | met |
+| Categorisation macro-F1 | ≥ 0.85 | **0.996** | met |
+| Anomaly recall (designed-for scenarios only) | ≥ 0.90 | **1.000** | met |
+| **Anomaly recall (including two held-out scenarios)** | ≥ 0.90 | **0.800** | **NOT met** |
 | Anomaly precision | ≥ 0.70 | **1.000** | met |
 | False-positive rate on clean documents | — | **0.000** | |
+
+The recall criterion is met on the scenarios the detectors were built for and
+**fails once two scenarios nobody designed for are included.** Both readings
+are given because only the second says anything about unseen fraud.
 
 **Both exit criteria are met, and the numbers are too good to take at face
 value.** The section below says why, and what the sensitivity sweep shows.
@@ -38,6 +43,50 @@ value.** The section below says why, and what the sensitivity sweep shows.
 
 | Injected anomaly | Caught |
 |---|---|
+| `duplicate_invoice_number` | 9 / 9 |
+| `corrupt_gstin` | 6 / 6 |
+| `inflated_total` | 5 / 5 |
+| `invalid_gst_rate` | 4 / 4 |
+| `future_invoice_date` | 4 / 4 |
+| **`line_item_padding`** *(held out)* | **0 / 4** |
+| **`gstin_state_contradicts_address`** *(held out)* | **0 / 3** |
+
+Precision 1.000, recall **0.800**, false-positive rate 0.000 on clean documents.
+
+### The held-out scenarios are the real result
+
+The first five rows are scenarios the detectors were explicitly written for,
+and they score 100%. That number means almost nothing on its own: a detector
+evaluated only against its own design brief is being marked by the person who
+set the paper.
+
+So two scenarios were added that **nothing in the system was built to catch**:
+
+- **`line_item_padding`** — one line's `quantity x unit_price` no longer matches
+  its `line_total`, but `subtotal` and `grand_total` are adjusted so the invoice
+  still reconciles. Document-level arithmetic passes cleanly. Only a per-line
+  check sees it, and the per-line check deliberately stays quiet when a
+  discount might explain the gap (see Phase 2). **Caught: 0 of 4.**
+- **`gstin_state_contradicts_address`** — the first two digits of a GSTIN are
+  the state code, so a Karnataka address carrying a Maharashtra GSTIN is either
+  a keying error or a fabricated number. Nothing cross-checks the two.
+  **Caught: 0 of 3.**
+
+Both are missed completely, and recall drops from 1.000 to 0.800 once they are
+included. That is the honest measure of this detector: **it catches what it was
+designed to catch and nothing else.**
+
+They are deliberately **not** being fixed. Adding detectors for them and
+re-reporting 100% would reproduce exactly the circularity this experiment
+exists to expose. They stay in the harness as a permanent probe, so any future
+claim of high recall has to survive two scenarios nobody tuned for.
+
+Closing them is genuinely worth doing — a per-line arithmetic check that
+accounts for unread discounts, and a GSTIN-state-versus-address cross-check are
+both small additions. They are listed in `docs/limitations.md` as known open
+gaps rather than silently absorbed.
+
+---|---|
 | `inflated_total` | 5 / 5 |
 | `duplicate_invoice_number` | 2 / 2 |
 | `invalid_gst_rate` | 1 / 1 |

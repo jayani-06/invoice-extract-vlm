@@ -40,6 +40,10 @@ from invoice_extract.rag.taxonomy import account_name  # noqa: E402
 
 #: Which injected anomaly each flag code is evidence for. A document counts as
 #: detected when any flag maps to a kind that was actually injected.
+#: Scenarios deliberately held out: no detector was written for them. They are
+#: scored like any other, and a zero is reported as a zero.
+HELD_OUT_KINDS = {"line_item_padding", "gstin_state_contradicts_address"}
+
 FLAG_TO_KIND = {
     "duplicate_invoice_number": "duplicate_invoice_number",
     "unusual_amount_for_vendor": "inflated_total",
@@ -299,7 +303,15 @@ def main(argv: list[str] | None = None) -> int:
         "|---|---|---|",
     ]
     for kind, counts in sorted(per_kind.items()):
-        md.append(f"| `{kind}` | {counts['detected']} | {counts['injected']} |")
+        label = f"`{kind}`" + (" *(held out)*" if kind in HELD_OUT_KINDS else "")
+        md.append(f"| {label} | {counts['detected']} | {counts['injected']} |")
+    md += [
+        "",
+        "Rows marked *held out* are scenarios no detector was written for. They "
+        "are included precisely because a detector evaluated only against its "
+        "own design brief measures nothing, and a zero there is reported as a "
+        "zero rather than quietly excluded.",
+    ]
     md += [
         "",
         "Only `high` and `medium` severity count as flagging a document. The `low` "
