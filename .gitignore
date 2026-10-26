@@ -47,6 +47,9 @@ data/processed/*/manifest.jsonl
 demo_cache/
 vlm_outputs.json
 
-# The Colab payload IS tracked (0.5 MB): the notebook clones the repo to
-# get it, which removes a manual file upload from the GPU run.
+# The Colab payloads ARE tracked: the notebooks clone the repo to get them,
+# which removes a manual file upload from the GPU run. The eval payload is
+# 6.5 MB (100 document images); the demo one is 0.5 MB.
 !vlm_payload.zip
+!vlm_eval_payload.zip
+!vlm_eval_payload.selection.json

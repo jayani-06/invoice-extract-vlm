@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from invoice_extract.data.validate import load_schema, validate_jsonschema  # noqa: E402
 from invoice_extract.models.postprocess import finalize  # noqa: E402
+from invoice_extract.models.prompting import extract_json_object  # noqa: E402
 from invoice_extract.models.registry import get_extractor  # noqa: E402
 from invoice_extract.reading_order import reading_order_text  # noqa: E402
 
@@ -50,6 +51,23 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--extractor", default="rules")
     ap.add_argument("--profile", default="clean", help="Degradation profile to evaluate on")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument(
+        "--doc-ids",
+        type=Path,
+        default=None,
+        help="Restrict to the documents listed in a selection record written by "
+        "export_vlm_payload.py. Comparing two extractors is only meaningful on "
+        "identical documents, and --limit does not guarantee that.",
+    )
+    ap.add_argument(
+        "--replay",
+        type=Path,
+        default=None,
+        help="Score raw responses from a finished GPU run (vlm_outputs.json) instead "
+        "of calling a model. Needs no GPU and no extractor. The point is that a "
+        "replay is scored by this same code path, so the VLM and the rules "
+        "baseline are judged by identical post-processing and metrics.",
+    )
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument(
         "--ocr-source",
@@ -80,16 +98,80 @@ def main(argv: list[str] | None = None) -> int:
 
     manifest = [json.loads(ln) for ln in manifest_path.read_text().splitlines() if ln.strip()]
     rows = [r for r in manifest if r["profile"] == args.profile]
+
+    if args.doc_ids:
+        record = json.loads(args.doc_ids.read_text(encoding="utf-8"))
+        wanted: list[str] = []
+        for selection in record.get("selections", [record]):
+            # One record can cover several corpora; take only the ids that
+            # belong to this one, so the same file drives every corpus's run.
+            if selection.get("corpus") in (None, args.corpus.name):
+                wanted += selection.get("doc_ids") or []
+        if not wanted:
+            corpora = [s.get("corpus") for s in record.get("selections", [record])]
+            print(
+                f"{args.doc_ids} selects no documents for corpus {args.corpus.name!r}; "
+                f"it covers {corpora}",
+                file=sys.stderr,
+            )
+            return 1
+        by_id = {r["doc_id"]: r for r in rows}
+        missing = sorted(set(wanted) - set(by_id))
+        if missing:
+            print(
+                f"{len(missing)} selected document(s) are not in this corpus at profile "
+                f"{args.profile!r}, e.g. {missing[:3]}",
+                file=sys.stderr,
+            )
+            return 1
+        rows = [by_id[d] for d in wanted]
+
     if args.limit:
         rows = rows[: args.limit]
     if not rows:
         print(f"No corpus rows for profile {args.profile!r}", file=sys.stderr)
         return 1
 
+    # A replay reads responses a GPU already produced. Nothing below needs an
+    # extractor, OCR engine or model weights.
+    replayed: dict[str, dict] = {}
+    replay_model = None
+    if args.replay:
+        payload = json.loads(args.replay.read_text(encoding="utf-8"))
+        replayed = payload.get("outputs") or {}
+        replay_model = payload.get("model_id") or payload.get("model")
+        if not replayed:
+            print(f"{args.replay} carries no outputs", file=sys.stderr)
+            return 1
+        covered = [r for r in rows if r["doc_id"] in replayed]
+        if not covered:
+            print(
+                f"None of the {len(rows)} selected documents appear in {args.replay}",
+                file=sys.stderr,
+            )
+            return 1
+        if len(covered) < len(rows):
+            # Scoring only the documents the model happened to answer would
+            # inflate the result. Say so and keep the full denominator.
+            print(
+                f"NOTE: {len(rows) - len(covered)} of {len(rows)} selected documents are "
+                f"absent from {args.replay.name}. They are scored as misses, not dropped.",
+                file=sys.stderr,
+            )
+
+        # How the run was actually produced is recorded in the payload, and it
+        # overrides the CLI. Left to the `--ocr-source` default, a vision-only
+        # GPU run would be stamped `is_ocr_ceiling: true` and reported as a
+        # perfect-OCR ceiling -- when a model that read nothing but pixels has
+        # produced the project's first genuine end-to-end number. Mislabelling
+        # that understates the result and corrupts every table it reaches.
+        args.ocr_source = "gold" if payload.get("ocr_hint") else "none"
+        args.vision_only = not payload.get("ocr_hint")
+
     # Wire up OCR only if it is actually needed.
     ocr_engine = None
     preprocess = None
-    if args.ocr_source == "engine":
+    if args.ocr_source == "engine" and not args.replay:
         from invoice_extract.ocr.base import OcrEngineUnavailableError, get_engine
         from invoice_extract.preprocess.pipeline import Pipeline, get_config
 
@@ -110,11 +192,13 @@ def main(argv: list[str] | None = None) -> int:
     elif args.extractor == "rules" and args.ocr_source == "engine":
         extractor_kwargs = {"ocr_engine": ocr_engine, "preprocess": preprocess}
 
-    try:
-        extractor = get_extractor(args.extractor, **extractor_kwargs)
-    except Exception as exc:
-        print(f"Could not construct extractor {args.extractor!r}: {exc}", file=sys.stderr)
-        return 3
+    extractor = None
+    if not args.replay:
+        try:
+            extractor = get_extractor(args.extractor, **extractor_kwargs)
+        except Exception as exc:
+            print(f"Could not construct extractor {args.extractor!r}: {exc}", file=sys.stderr)
+            return 3
 
     schema = load_schema()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -135,19 +219,33 @@ def main(argv: list[str] | None = None) -> int:
             (args.corpus / "canonical" / f"{doc_id}.json").read_text(encoding="utf-8")
         )
         image_path = args.corpus / row["image_path"]
-        pages = [
-            {
-                "page_index": 0,
-                "image_path": row["image_path"],
-                "width": row["width"],
-                "height": row["height"],
-                "dpi": row.get("dpi"),
-            }
-        ]
+        page = {
+            "page_index": 0,
+            "image_path": row["image_path"],
+            "width": row["width"],
+            "height": row["height"],
+        }
+        # The schema types `dpi` as an integer, so an absent dpi has to be an
+        # absent key, not a null. FATURA2's manifest carries no dpi (its pages
+        # are vector renders, not scans), and emitting `"dpi": null` made all
+        # 50 predictions fail schema validation -- which reads in a report as
+        # the extractor producing malformed documents rather than as a corpus
+        # that does not record dpi.
+        if row.get("dpi") is not None:
+            page["dpi"] = row["dpi"]
+        pages = [page]
 
         t0 = time.perf_counter()
         try:
-            if args.ocr_source == "gold" and hasattr(extractor, "predict_from_text"):
+            if args.replay:
+                entry = replayed.get(doc_id) or {}
+                # A document the model never answered, an empty response and an
+                # unparseable response are all the same outcome: no prediction.
+                # `extract_json_object` is re-run here rather than trusting the
+                # notebook's `parsed`, so parsing is the repo's current parser.
+                raw = extract_json_object(entry.get("raw_response") or "") or {}
+                stats["total_ms"] += float(entry.get("elapsed_ms") or 0.0)
+            elif args.ocr_source == "gold" and hasattr(extractor, "predict_from_text"):
                 raw = extractor.predict_from_text(gold_text_for(args.corpus, row))
             elif args.extractor.startswith("vlm") and args.ocr_source == "gold":
                 raw = (
@@ -161,7 +259,8 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # a model failure is a data point, not a crash
             print(f"  {doc_id}: extractor raised {type(exc).__name__}: {exc}", file=sys.stderr)
             raw = {}
-        stats["total_ms"] += (time.perf_counter() - t0) * 1000
+        if not args.replay:
+            stats["total_ms"] += (time.perf_counter() - t0) * 1000
 
         if not raw:
             stats["parse_failures"] += 1
@@ -192,6 +291,9 @@ def main(argv: list[str] | None = None) -> int:
 
     run = {
         "extractor": args.extractor,
+        "replayed_from": str(args.replay) if args.replay else None,
+        "replay_model": replay_model,
+        "doc_ids_from": str(args.doc_ids) if args.doc_ids else None,
         "profile": args.profile,
         "ocr_source": args.ocr_source,
         "ocr_engine": args.ocr_engine if args.ocr_source == "engine" else None,
