@@ -378,9 +378,13 @@ elif screen.startswith("4"):
                 )
         st.markdown("\n".join(rows), unsafe_allow_html=True)
     else:
+        # The VLM run covered the 100-document evaluation slice, which was
+        # selected independently of the demo documents, so most cached
+        # documents legitimately carry no model output. Saying "the VLM has not
+        # been run" here would now be false.
         not_run(
-            "the VLM has not been run yet. Execute "
-            "`notebooks/vlm_demo_outputs.ipynb` on Colab, then:\n\n"
+            "this document was not part of the VLM run. To cover it, add it to "
+            "the payload and re-run `notebooks/vlm_eval.ipynb` on Colab, then:\n\n"
             "```\npython scripts/build_demo_cache.py --vlm vlm_outputs.json\n```"
         )
 

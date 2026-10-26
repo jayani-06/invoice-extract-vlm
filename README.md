@@ -181,7 +181,7 @@ of the magnitudes did. That is a finding about the experiment, and
 `docs/phase1_preprocessing.md` records it rather than quietly replacing the
 table.
 
-**Phase 2 (code complete, VLM unrun)** - post-processing, prompting, rules and
+**Phase 2 (done; VLM run, and it lost)** - post-processing, prompting, rules and
 null baselines, the VLM wrapper, registry, runner and ablation runner, all
 tested. The headline is a generalisation gap, measured on a third-party
 benchmark:
@@ -194,10 +194,27 @@ benchmark:
 A 44-point drop, reproducing FATURA's central claim on our own baseline.
 `vendor.name` collapses from 1.000 to **0.000** - worse than predicting nothing.
 So the regex baseline saturates *our* corpus, not the task, and there is a
-large measurable gap for a VLM to close. **The VLM itself has never been run** -
-there is no GPU on this machine, so `models/vlm.py` is unit-tested through an
-injected fake model but its generation call is unverified. See
-`docs/phase2_extraction.md`.
+large measurable gap for a VLM to close.
+
+**The VLM has now been run, and it did not close the gap.** Qwen2-VL-2B, fp16
+on a Colab T4, vision only, 100 documents - 50 of ours and 50 FATURA2, the same
+documents the baseline is re-scored on:
+
+| Extractor | Our layouts | FATURA2 | Drop |
+|---|---|---|---|
+| `rules` (perfect-OCR ceiling) | **1.000** | **0.610** | -39 pts |
+| `vlm:qwen2-vl-2b` (end-to-end) | 0.843 | 0.432 | **-41 pts** |
+
+**The VLM is just as layout-sensitive as the regex, and worse everywhere.** A
+2B vision-language model losing to hand-written regex on clean synthetic
+invoices is the result, and it is kept rather than explained away.
+
+The mechanism the phase proposed is nonetheless real: on FATURA2 the VLM wins
+exactly the fields a label anchor cannot reach - `buyer.name` 0.000 -> 0.560,
+`payment_terms` 0.000 -> 0.460, `invoice_date` 0.640 -> 0.900 - and is swamped
+by being weaker on everything that does have a label. Three caveats all favour
+the baseline, chiefly that its figures are a perfect-OCR ceiling while the
+VLM's are genuine end-to-end. See `docs/phase2_extraction.md`.
 
 **Recently closed**
 
@@ -266,7 +283,10 @@ unfixed as a permanent probe.
 
 **Still open**
 
-- **The VLM has never been run.** No GPU here.
+- **One VLM, one configuration.** 2B vision-only has been run and lost. The
+  3B/7B presets and the hybrid image+OCR mode are implemented and unrun, so
+  "a VLM cannot close this gap" is *not* established - only that this one
+  does not.
 - **Phase 5 (API / service layer) not started.**
 - **No real *photographed* documents.** FATURA2 is third-party but still
   synthetic. SROIE (real photographed receipts) and CORD remain unconverted.

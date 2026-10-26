@@ -30,20 +30,36 @@ are the single highest-value acquisition left.
 
 ---
 
-## The VLM has never been run
+## The VLM has been run once, on one model
 
-`src/invoice_extract/models/vlm.py` is written against the transformers API and
-unit-tested through an injected fake model and processor. That covers prompt
-construction, response parsing and coercion. It does **not** establish that the
-generation call is correct.
+Qwen2-VL-2B, fp16 on a Colab T4, greedy, vision only, 100 documents. It **lost
+to the regex baseline on both corpora** and did not close the generalisation
+gap (−41 points versus the baseline's −39). That is a measurement, not a
+limitation. What remains a limitation is everything around it:
 
-There is no GPU on the development machine. One Colab run was executed and its
-output discarded, because it used a prompt template containing a placeholder
-value (`123.45`) that Qwen2-VL-2B copied verbatim in 8 of 8 responses. The
-prompt is fixed; the run has not been repeated.
-
-**Any VLM number quoted anywhere in this project is therefore either absent or
-stale.** The demo renders "not run" rather than showing the superseded figures.
+- **One model, one configuration.** 2B is the smallest preset in
+  `models/vlm.py`. `qwen2.5-vl-3b` (4-bit), `qwen2-vl-7b`, `internvl2-2b` and
+  `florence-2-large` are all implemented and unrun, so "a VLM cannot close this
+  gap" is **not** established — only that this one does not.
+- **Hybrid mode is implemented and unmeasured.** `build_prompt(ocr_text=...)`
+  puts the OCR transcript in the prompt, which refs [3] and [7] say should
+  help. Every number here is vision-only.
+- **The comparison is not apples to apples, and the asymmetry favours the
+  baseline.** The rules figures use `--ocr-source gold`, a perfect-OCR ceiling.
+  The VLM figures are genuine end to end. Re-running the baseline with
+  `--ocr-source engine` is open work, and will lower it.
+- **The prompt hard-codes `"currency": "INR"`.** Correct for our corpus, wrong
+  for FATURA2, and it will have depressed currency-adjacent fields there. Left
+  alone deliberately: changing it because the test set is known to be non-INR
+  would be tuning against the test split.
+- **6 of 100 responses did not parse** and are scored as fully missed
+  documents. Some are probably truncation at the 1536-token budget rather than
+  malformed output, so part of that 6% is a configuration artefact.
+- **One run, no repeats.** Greedy decoding makes it reproducible, but there is
+  no seed-variance or temperature sweep behind any of these numbers.
+- **Only 2 of the 8 demo documents carry VLM output**, because the demo cache
+  and the evaluation slice were selected independently. Screen 4 shows a real
+  comparison on those two and "not run" on the rest.
 
 ---
 
@@ -80,10 +96,12 @@ stale.** The demo renders "not run" rather than showing the superseded figures.
 
 ## Phase 2 — extraction
 
-- **No end-to-end accuracy number exists.** Every extraction result uses
-  `--ocr-source gold`, which feeds the renderer's own text. That is a
-  perfect-OCR **ceiling**, not an end-to-end measurement. Real figures will be
-  lower.
+- **Only the VLM has an end-to-end number.** Every `rules` result uses
+  `--ocr-source gold`, which feeds the renderer's own text — a perfect-OCR
+  **ceiling**, not an end-to-end measurement. The VLM run read pixels with no
+  OCR anywhere, so it is the project's only genuine end-to-end figure, and the
+  two are therefore not directly comparable. Re-running the baseline with
+  `--ocr-source engine` is open work and will lower it.
 - **FATURA2 has no line-item annotations.** Tag 10 is a single `table`
   placeholder covering the whole region, so every converted document carries
   `line_items: []`. The line-item exit criterion is verified **only on our own
@@ -124,8 +142,21 @@ stale.** The demo renders "not run" rather than showing the superseded figures.
 
 ## Phase 4 — vendor validation
 
-- **Four fraud scenarios, all injected by us.** Same caveat as Phase 3, without
-  the held-out probe — adding one here is open work.
+- **Six fraud scenarios, all injected by us.** Two are held out and **both are
+  missed completely**, so recall is 1.000 on the designed-for four and
+  **0.524** including the probe:
+
+  | Held-out scenario | Caught |
+  |---|---|
+  | `invoice_splitting` (a purchase broken into pieces under an approval ceiling) | **0 / 4** |
+  | `quantity_inflation` (contract unit price, units never delivered) | **0 / 6** |
+
+  Each is blind in a different way from the designed four. `invoice_splitting`
+  is a pattern *across* invoices and every individual document in it is
+  impeccable; the one check that looks across invoices keys on an identical
+  total, which splitting avoids. `quantity_inflation` exploits the project
+  validating what a vendor charges per unit but never **how many units it
+  claims to have delivered**. Kept unfixed, like the Phase 3 probe.
 - **63 synthetic suppliers.** No name collisions, no mergers, no subsidiaries
   sharing a GSTIN, no legitimate bank-detail changes with paperwork behind them.
   All of those are routine in a real supplier file and all would produce
@@ -160,6 +191,7 @@ stale.** The demo renders "not run" rather than showing the superseded figures.
 | Phase 2 FATURA2 | 300 documents |
 | Phase 3 | 100 ledger / 50 evaluation |
 | Phase 4 | 100 history / 50 evaluation |
+| VLM run | 100 documents (50 ours, 50 FATURA2) |
 
 Phase 1 is the thin one, and it is the one case where the thinness has been
 measured rather than assumed: the first sweep ran at n = 4 and got the pipeline
@@ -190,9 +222,14 @@ that consumes it.** Phases 5 and 6 may yet surface a fourth.
 
 In order:
 
-1. **Run the VLM.** One Colab session. It is the single largest unmeasured
-   claim in the project.
-2. **Convert SROIE.** Real photographed receipts would be the first time any
-   stage here meets a real scan.
-3. **Measure end-to-end**, not against the perfect-OCR ceiling.
-4. **Add a held-out fraud scenario to Phase 4**, matching the Phase 3 probe.
+1. **Convert SROIE.** Real photographed receipts would be the first time any
+   stage here meets a real scan. Now the largest single gap.
+2. **Re-run the rules baseline with `--ocr-source engine`.** Until then the
+   headline comparison puts a perfect-OCR ceiling beside a genuine end-to-end
+   figure, which flatters the baseline.
+3. **Try a bigger VLM and the hybrid image+OCR mode.** 2B vision-only lost; the
+   3B/7B presets and the OCR hint are implemented and unrun, so the question
+   the phase actually asked is still open.
+4. ~~Run the VLM~~ — done, 100 documents, and it lost.
+5. ~~Add a held-out fraud scenario to Phase 4~~ — done, two of them, both
+   score 0.

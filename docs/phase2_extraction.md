@@ -64,11 +64,87 @@ alone.** The earlier reading — "a regex saturates the task, so the VLM must
 justify itself elsewhere" — was an artefact of evaluating on documents we
 generated ourselves. On unseen layouts there is a large, measurable gap
 (0.559 → the 0.90 exit criterion), and closing it is exactly what a VLM is for.
-That is the argument for the model, and it is now evidence rather than
-assertion.
+That is the argument for the model, and it is evidence rather than assertion.
 
-The VLM itself has still **not been run** (no GPU on this machine), so the
-right-hand column of this comparison is empty and no claim is made about it.
+---
+
+## The VLM has now been run, and it loses
+
+Qwen2-VL-2B-Instruct, fp16 on a Colab T4, greedy decoding, **vision only** — no
+OCR text in the prompt. 100 documents: 50 from our corpus and 50 from FATURA2,
+the identical documents the baseline is re-scored on below. 39.3 s/document.
+Reproduce with `notebooks/vlm_eval.ipynb`, then `run_extraction.py --replay`.
+
+### On our own layouts (n = 50)
+
+| Extractor | Header acc | Critical-fields | Macro field acc | Line-item F1 | Parse failures | Measurement |
+|---|---|---|---|---|---|---|
+| `rules` | **1.000** | **1.000** | **0.919** | **1.000** | 0 | perfect-OCR ceiling |
+| `vlm:qwen2-vl-2b` | 0.843 | 0.720 | 0.818 | 0.970 | 2 | end-to-end (pixels only) |
+
+On the 17 genuinely held-out test-split documents alone: rules 1.000 / 0.924,
+VLM 0.853 / 0.813. The same answer, so the figure is not an artefact of the
+train-split documents the 50 necessarily include.
+
+### On FATURA2 (n = 50)
+
+| Extractor | Header acc | Critical-fields | Macro field acc | Parse failures | Measurement |
+|---|---|---|---|---|---|
+| `rules` | **0.610** | 0.000 | **0.453** | 0 | perfect-OCR ceiling |
+| `vlm:qwen2-vl-2b` | 0.432 | 0.000 | 0.241 | 4 | end-to-end (pixels only) |
+
+### The gap did not close, which is the result
+
+This phase predicted that a VLM would transfer to unseen layouts where a
+label-anchored regex cannot. **It did not.**
+
+| | Our layouts | FATURA2 | Drop |
+|---|---|---|---|
+| `rules` | 1.000 | 0.610 | **−39 points** |
+| `vlm:qwen2-vl-2b` | 0.843 | 0.432 | **−41 points** |
+
+The VLM is *just as* layout-sensitive as the regex, and worse everywhere. A 2B
+vision-language model losing to hand-written regex on clean synthetic invoices
+is the finding, and it is kept rather than explained away.
+
+Counting fields, `rules` wins 21 to 3 on our corpus. On FATURA2 it is much
+closer — 4 to 3 with 5 ties — and the three the VLM wins are exactly the ones a
+label anchor cannot reach:
+
+| Field | `rules` | `vlm` | Why |
+|---|---|---|---|
+| `parties.buyer.name` | 0.000 | **0.560** | No stable label precedes it; the model reads it from layout |
+| `invoice_meta.payment_terms` | 0.000 | **0.460** | Free text, no anchor vocabulary |
+| `invoice_meta.invoice_date` | 0.640 | **0.900** | Handles "Date of Issue" / "Date" variants the regex never saw |
+
+So the mechanism the phase proposed is real — the model *does* read fields that
+have no label to anchor on — it is simply swamped by the model being weaker at
+everything that does have one, including `grand_total` (1.000 → 0.720) and
+`invoice_number` (0.800 → 0.540).
+
+### Three caveats, all of which favour the baseline
+
+1. **This is not yet apples to apples, and the asymmetry helps `rules`.** Every
+   baseline figure uses `--ocr-source gold`, a perfect-OCR ceiling. The VLM
+   figure is genuine end to end — it read pixels, with no OCR anywhere. A fair
+   comparison needs the baseline re-run with `--ocr-source engine`, which is
+   open work. Expect the baseline to come down.
+2. **The prompt template hard-codes `"currency": "INR"`.** Correct for our
+   corpus, wrong for FATURA2, and it will have depressed currency-adjacent
+   fields there. It was left alone deliberately: changing it *because the test
+   set is known to be non-INR* is tuning against the test split.
+3. **6 of 100 responses did not parse** and are scored as fully missed
+   documents, not dropped. At 1536 `max_new_tokens` some responses are likely
+   truncated mid-object rather than malformed, so part of that 6% is a budget
+   problem rather than a model one.
+
+### What this says about the project
+
+The honest reading: **a 2B model is not the answer to the generalisation gap,
+and the gap is still open.** The next move is a larger model (`qwen2.5-vl-3b`
+in 4-bit, or 7B) and the hybrid image+OCR mode, which is already implemented
+and unmeasured — refs [3] and [7] say the OCR hint should help, and on a model
+this weak at reading there is a lot of room for it to.
 
 ---
 
