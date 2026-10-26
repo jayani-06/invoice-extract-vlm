@@ -107,10 +107,15 @@ def main(argv: list[str] | None = None) -> int:
 
     log(f"{BOLD}1. page condition{OFF}")
     if triage:
-        for stage, why in sorted(triage["reasons"].items()):
+        # `evidence`, not `reasons`: the key was renamed when triage stopped
+        # composing stages and started selecting a measured configuration.
+        evidence = triage.get("evidence") or {}
+        for stage, why in sorted(evidence.items()):
             log(f"   {stage:<24} {DIM}{why}{OFF}")
-        if not triage["reasons"]:
-            log(f"   {DIM}page looks clean; no preprocessing applied{OFF}")
+        log(
+            f"   {DIM}-> {triage.get('chosen_config', args.preprocess)}"
+            f"{'' if evidence else ' (page looks clean)'}{OFF}"
+        )
     else:
         log(f"   {DIM}fixed config {args.preprocess!r}{OFF}")
 
