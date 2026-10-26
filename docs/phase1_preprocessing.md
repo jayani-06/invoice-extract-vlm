@@ -197,6 +197,71 @@ means nothing. The large effects — the 7-fold medium CER drop and the ~15-poin
 word-accuracy gain across every row — are far too big to be sampling noise. The
 per-cell orderings are not.
 
+### Does the adaptive policy earn its place? Partly.
+
+`preprocess/triage.py` exists because preprocessing is worth +14.1 points of
+word accuracy on `heavy` and **−8.9 on `clean`**, and the pipeline applied it
+unconditionally. Measured against the two fixed configs it sits between,
+15 documents per cell, mobile models:
+
+| Word accuracy | clean | medium | heavy | mean |
+|---|---|---|---|---|
+| `raw` | **0.5733** | 0.4281 | 0.1651 | 0.3888 |
+| `full(no-binarize)` | 0.4842 | **0.4918** | **0.3062** | 0.4274 |
+| `adaptive` | **0.5733** | 0.4432 | 0.2671 | **0.4279** |
+
+**It does not recover best-of-both, and that is reported rather than
+presented as a success.** It does exactly what it was built to do on clean
+pages -- 0.5733, identical to `raw`, so the 8.9-point penalty is gone -- but it
+gives up **4.9 points on `medium`** and **3.9 on `heavy`** against the fixed
+full chain. On the mean across profiles it ties `full(no-binarize)`
+(0.4279 vs 0.4274), which is a tie, not a win.
+
+It does win CER on `heavy` outright (0.4030, better than either fixed config),
+and it costs more: triage adds ~350 ms, so `adaptive` on heavy is 917 ms
+against 618 ms for the fixed chain.
+
+**Why it under-performs on degraded pages, precisely.** The gates fire
+independently, so `adaptive` runs a *subset* of the full chain. On `heavy` the
+`upscale` gate is keyed on Laplacian variance, and heavy speckle keeps that
+variance high even after the median filter the signal is measured on -- so
+`upscale` often does not fire on exactly the pages that need it most. The
+policy is therefore not mis-calibrated in general; one gate is blind in the
+one regime where it matters.
+
+**Verdict:** keep it, because it is the only configuration that is best on
+clean pages while staying close on degraded ones, and the clean case is the
+common one in production. But it buys a tie rather than the best-of-both the
+design predicted, and the `upscale` gate needs a signal that survives heavy
+noise before that changes. Recorded as an open limitation, not fixed by
+adjusting a threshold until the table looked better.
+
+### The CER exit criterion fails on `heavy` even with the best models
+
+P1.5 left this open: PP-OCRv6 medium passes the < 8% CER criterion on `medium`
+(0.0114), and `heavy` had not been measured. It has now, 5 documents per cell:
+
+| Pipeline | heavy CER, v5-fast | heavy CER, v6-medium |
+|---|---|---|
+| `raw` | 0.4390 | **0.2486** |
+| `gray+border+deskew` | 0.4641 | 0.3470 |
+| `full(no-binarize)` | 0.4284 | 0.2803 |
+| `full+sauvola` | 0.5415 | 0.3961 |
+
+The stronger models nearly halve it, and **0.2486 is still three times the
+0.0800 target.** So the headline stands as a statement about the project rather
+than only about `fast=True`: **the CER criterion is met on `clean` and
+`medium` with v6-medium models and fails on `heavy` under every configuration
+measured.** Preprocessing does not rescue it either -- `raw` is the best heavy
+row with v6, as it was with v5.
+
+Note also that on `heavy` with v6-medium, `gray+border+deskew` and
+`full(no-binarize)` both reach 0.5304 word accuracy against `raw`'s 0.3077.
+That is a **+22-point** preprocessing gain, twice the +11 the mobile models
+showed, so the "preprocessing earns its place on degraded pages" conclusion is
+*stronger* with better recognition, not weaker -- the opposite of what the
+clean-page penalty shrinking to 2.6 points suggested.
+
 ### Caveats on these numbers
 
 - **n = 15 documents per cell**, 92.6 minutes on CPU. Adjacent rows differ by

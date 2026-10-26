@@ -153,15 +153,33 @@ limitation. What remains a limitation is everything around it:
 - **The headline Phase 1 numbers are mobile-model numbers.** PP-OCRv6 medium
   cuts `medium` CER 7-fold (0.0812 → 0.0114) and **passes the CER exit
   criterion** there, at 2.8x the cost. It also re-orders the pipeline ranking
-  in 3 of 4 measured cells. `heavy` is not yet measured with v6, so "both exit
-  criteria failed" is currently a claim about `fast=True` only. n=5 per cell.
+  in 3 of 4 measured cells. n=5 per cell.
+- **The CER criterion fails on `heavy` under every configuration measured.**
+  Best heavy CER is 0.2486 with v6-medium (0.4284 with mobile) against a 0.0800
+  target, and preprocessing does not rescue it — `raw` is the best heavy row
+  with both model families. So "the criterion is not met" is now a statement
+  about the project, not only about `fast=True`.
 - **The pipeline ranking is not a property of the pipeline.** It moved when n
   went 4 → 15 (4 of 6 cells) and again when the recognition model changed (3 of
   4 cells). Any "pipeline X is best" claim here is conditional on both.
-- **The adaptive preprocessing policy is calibrated against the mobile
-  models.** The 8.9-point clean-page penalty it exists to avoid shrinks to 2.6
-  points under PP-OCRv6 medium, so its value is model-dependent and currently
-  unquantified for the stronger models.
+- **The adaptive preprocessing policy buys a tie, not the best-of-both it was
+  designed for.** Measured: it matches `raw` exactly on clean pages (0.5733, so
+  the 8.9-point penalty is gone) but gives up 4.9 points of word accuracy on
+  `medium` and 3.9 on `heavy` against the fixed full chain, and ties it on the
+  mean across profiles (0.4279 vs 0.4274) while costing ~350 ms more per page.
+
+  The cause is identified and not fixed: the `upscale` gate is keyed on
+  Laplacian variance, and heavy speckle keeps that variance high even after the
+  median filter the signal is measured on, so `upscale` often fails to fire on
+  the pages that most need it. One gate is blind in the one regime where it
+  matters. Kept because it is the only configuration best on clean pages while
+  staying close on degraded ones, but it is machinery that has not yet paid for
+  itself.
+- **Its calibration is against the mobile models**, and the picture changes
+  with better recognition in a way that cuts against the policy: with v6-medium
+  on `heavy`, preprocessing is worth **+22 points** of word accuracy (0.3077
+  raw → 0.5304), twice the +11 the mobile models showed. A stronger recogniser
+  benefits *more* from preprocessing on hard pages, not less.
 - **Tesseract is implemented but never benchmarked.** It needs a system binary
   that is not installed here.
 
@@ -338,7 +356,7 @@ ordering.
 
 ---
 
-## The corpus has been wrong three times
+## The data has been wrong six times, and never loudly
 
 Each was found only because a later phase depended on the data being right, and
 each would have invalidated the phase that found it:
@@ -349,8 +367,19 @@ each would have invalidated the phase that found it:
 | `line_total` tax-inclusive; both checks double-subtracted discount | Phase 2 | 46/150 documents flagged; line-item arithmetic unusable as a signal |
 | Vendor identity re-rolled per invoice (0/45 stable GSTIN or bank account); prices 57% spread; invoice numbers colliding | Phase 4 | Vendor master impossible; bank-change detection fires on every invoice |
 
-This is itself a limitation: **a generator can only be validated by something
-that consumes it.** Phases 5 and 6 may yet surface a fourth.
+Three more were in the **converters** rather than the generator, found while
+adding SROIE:
+
+| Defect | Found in | Effect if unfixed |
+|---|---|---|
+| `pages[0].dpi` emitted as null where the schema types it integer | Phase 2 | All 50 FATURA2 predictions fail schema validation, reading as the extractor emitting malformed documents |
+| `annotator` / `currency` null, and `parties.buyer` null behind a `$ref` | SROIE | All 652 documents silently skipped at conversion, reading as "the mirror is unusable" |
+| Line items paired by same-row overlap | SROIE | 37% of receipt amounts found; receipts print the amount on the line *below*, and the missing 63% went into line-item F1 as the extractor's fault |
+
+**Not one of these six raised an error.** Every one produced a plausible
+number. That is the pattern worth taking from this project: **a generator can
+only be validated by something that consumes it**, and a converter only by
+something that scores it. Phases 5 and 6 may yet surface a seventh.
 
 ---
 
