@@ -138,14 +138,51 @@ limitation. What remains a limitation is everything around it:
   Recall is 1.000 on designed-for scenarios and **0.800** once these are
   included. They are kept unfixed as a permanent probe: closing them and
   re-reporting 100% would reproduce the circularity they exist to expose.
-- **Tiny label space.** Three accounts, ten item descriptions. Real charts of
-  accounts run to hundreds of codes, and the hard cases are near-neighbours
-  ("software subscription" vs "IT equipment") that this corpus does not contain.
-- **No LLM is involved.** The plan describes an LLM assigning a category from
-  retrieved context. This retrieves and takes a similarity-weighted vote.
-- **Dense retrieval is untested.** TF-IDF character n-grams are what has been
-  measured; the `Retriever` interface is ready for embeddings but nothing has
-  been run through it.
+- **Label space widened from 3 accounts / 10 descriptions to 6 / 21**, with
+  deliberately confusable pairs: "Software Subscription" (a service, 5040)
+  against "Laptop Docking Station" (hardware, 5020); "Annual Maintenance
+  Contract - HVAC" (upkeep, 5050) against "Air Conditioner Unit" (the asset,
+  5030); "Courier Charges" and "Freight Forwarding Service" (same account,
+  almost no shared characters). **The macro-F1 of 0.996 quoted elsewhere was
+  measured on the ten-description corpus and should be expected to fall.** The
+  re-run is queued.
+
+  Still far from real: a production chart of accounts runs to hundreds of
+  codes, and 6 is not 300.
+- **The generation step now exists, and the vote is its control.**
+  `rag/generate.py` prompts a local Qwen2.5-0.5B-Instruct with the retrieved
+  neighbours and their human-assigned categories, constrained to one account
+  code or `ABSTAIN`. A run is queued; until its numbers land, every Phase 3
+  figure quoted anywhere is a **weighted vote**, not a generated one, and is
+  labelled as such.
+
+  What the comparison is for: a generator that cannot beat a similarity-
+  weighted vote over the *same* retrieved context has added a model and bought
+  nothing. Reporting the generated path without the vote beside it would make
+  "RAG works" unfalsifiable.
+
+  Three guarantees the generator was built not to lose, each of which fails by
+  producing a *better-looking* number rather than an error: it abstains (a
+  generator that always answers shows higher coverage and is strictly worse);
+  it is not prompted when retrieval found nothing (otherwise RAG has quietly
+  become zero-shot classification); and only a code from the chart of accounts
+  is accepted, so a disobedient answer becomes an abstention rather than a
+  guess.
+
+  Confidence comes from the retrieved evidence, not the model. A 0.5B model's
+  self-reported certainty is worth nothing and log-probabilities over a 4-digit
+  code are not calibrated.
+- **Dense retrieval is implemented; its Phase 3 numbers are queued.**
+  `rag/embed.py` is a MiniLM sentence encoder behind the same `Retriever`
+  Protocol, verified against real weights (it retrieves "Wireless Mouse" for
+  "cordless pointing device for a computer", which character n-grams cannot).
+  Every Phase 3 figure quoted so far is **TF-IDF**, and `get_retriever` raises
+  rather than falling back, so a report can never say "dense" over numbers
+  TF-IDF produced.
+
+  It may well not win. Character n-grams suit this task unusually well, because
+  the variation retrieval has to survive is *surface* ("A4 PAPER 500SH"), which
+  is what 3-5 grams capture and what a semantic embedding discards.
 - **273 ledger entries.** Exact nearest-neighbour search is fine at this size
   and will need an approximate index at production scale.
 
@@ -166,15 +203,34 @@ limitation. What remains a limitation is everything around it:
   total, which splitting avoids. `quantity_inflation` exploits the project
   validating what a vendor charges per unit but never **how many units it
   claims to have delivered**. Kept unfixed, like the Phase 3 probe.
-- **63 synthetic suppliers.** No name collisions, no mergers, no subsidiaries
-  sharing a GSTIN, no legitimate bank-detail changes with paperwork behind them.
-  All of those are routine in a real supplier file and all would produce
-  findings this system would call fraud.
-- **No vendor aliasing.** A real master carries known trading names; this
-  matches on string similarity alone.
-- **`address_mismatch` is never exercised.** The generator gives each supplier
-  exactly one address, so the check never fires and its 75% threshold is
-  unvalidated.
+- **70 synthetic suppliers, and legitimate bank changes now exist.** Four of
+  them genuinely change bank account partway through their history. The system
+  still flags those — correctly, on evidence this thin — but the
+  false-positive rate is at last measured against a population containing
+  honest changes rather than only fraud. On a probe corpus that moved precision
+  from 1.000 to **0.750** and the false-positive rate on clean invoices from
+  0.000 to **0.308**; the old figures were flattered by a corpus with no hard
+  cases, and no threshold was adjusted to recover them.
+
+  **Still absent:** name collisions between genuinely distinct entities,
+  mergers, and subsidiaries sharing a GSTIN. All three are routine in a real
+  supplier file and all three would produce findings this system would call
+  fraud.
+- **Vendor aliasing is implemented.** 24 of 70 suppliers also bill under a
+  shortened trading name, and `VendorMaster.build` takes an explicit alias map
+  the generator writes beside the corpus. Explicit, never inferred: fuzzy
+  merging would also join `Arjun & Co` with `Arjun Pvt Ltd`, which this project
+  deliberately keeps apart. Without the map a company billing under two names
+  produces two records with half the history each, and a thin record is worse
+  than none -- identity checks switch on at two invoices.
+
+  What a real master has that this does not: aliases recorded by a human during
+  onboarding, including ones that share no words with the legal name.
+- **`address_mismatch` is now exercised.** Suppliers get a registered office
+  plus 0-2 branches (44 of 70 in a probe corpus), minted per company rather
+  than per invoice -- re-rolling per invoice would make the check fire on
+  everything, which is the vendor-identity defect listed below. A known branch
+  does not flag; an unseen address reaches REVIEW, never FAIL.
 - **Duplicate detection is O(n) over history per invoice.** Fine at 100
   documents, needs an index in production.
 - **An impostor vendor is indistinguishable from a legitimate new supplier.**
@@ -201,6 +257,14 @@ limitation. What remains a limitation is everything around it:
 | Phase 3 | 100 ledger / 50 evaluation |
 | Phase 4 | 100 history / 50 evaluation |
 | VLM run | 100 documents (50 ours, 50 FATURA2) |
+
+**A note on which numbers are current.** Several figures above were measured
+before the corpus was made harder (6 accounts instead of 3, 21 item
+descriptions instead of 10, branch addresses, trading names, legitimate bank
+changes) and before dense retrieval and the generation step existed. Where that
+is true it is said at the figure. The re-runs are queued; anything still
+carrying an old number is marked, and nothing has been deleted in anticipation
+of a better one.
 
 Phase 1 is the thin one, and it is the one case where the thinness has been
 measured rather than assumed: the first sweep ran at n = 4 and got the pipeline
