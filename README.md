@@ -155,20 +155,31 @@ unique layout combinations, 0 schema violations. Reproducible with
 **Phase 1 (run; both exit criteria FAILED)** - PaddleOCR 3.7 installed and the
 ablation executed on real images. Reported as a result, not deferred:
 
+15 documents per cell, 92.6 min CPU.
+
 | Criterion | Outcome |
 |---|---|
-| CER < 8% on the noisy subset | **FAILED** - best `medium` CER 0.162, `heavy` 0.369 (clean passes at 0.005) |
-| Preprocessing improves CER by >= 5 pts | **FAILED** - best delta is -1.2 pts; on `heavy` preprocessing is *worse* |
+| CER < 8% on the noisy subset | **FAILED** - best `medium` CER 0.0812 against a 0.0800 target, short by 0.12 of a point; `heavy` 0.4284 (clean passes at 0.0066) |
+| Preprocessing improves CER by >= 5 pts | **FAILED** - it improves CER on `heavy` only, by 1.1 pts; `medium` is 0.3 pts *worse* than raw |
 
 The interesting part is that the two metric families disagree. On heavily
-degraded pages `deskew` raises **word accuracy from 0.273 to 0.479 (+21 pts)**
-and detection F1 from 0.294 to 0.528, while nudging CER the wrong way. CER is
+degraded pages the full chain minus binarisation raises **word accuracy from
+0.1651 to 0.3062 (+14.1 pts)** while nudging CER the wrong way. CER is
 text-only - a modern detector reads a skewed page fine - whereas word accuracy
 requires the word to be found *in the right place*, which is what Phase 2
-extraction actually depends on. Deskewing earns its place; the exit criterion
-was written against the wrong metric. Sauvola binarisation is the worst row in
+extraction actually depends on. Preprocessing earns its place on degraded
+pages; the exit criterion was written against the wrong metric. On *clean*
+pages it is a net loss (0.5733 raw vs 0.4842 for the full chain), so it should
+be applied on evidence of degradation rather than unconditionally - nothing in
+the pipeline makes that decision yet. Sauvola binarisation is the worst row in
 every CER column: PaddleOCR's detector is trained on continuous-tone images and
-binarising discards what it uses. See `docs/phase1_preprocessing.md`.
+binarising discards what it uses.
+
+**An earlier sweep at n = 4 picked a different winning pipeline in 4 of 6
+metric/profile cells.** Every qualitative claim above survived the re-run; none
+of the magnitudes did. That is a finding about the experiment, and
+`docs/phase1_preprocessing.md` records it rather than quietly replacing the
+table.
 
 **Phase 2 (code complete, VLM unrun)** - post-processing, prompting, rules and
 null baselines, the VLM wrapper, registry, runner and ablation runner, all

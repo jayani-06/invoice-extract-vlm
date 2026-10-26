@@ -50,12 +50,24 @@ stale.** The demo renders "not run" rather than showing the superseded figures.
 ## Phase 1 — preprocessing and OCR
 
 - **Both exit criteria failed.** CER never reached < 8% on noisy pages (best
-  `medium` is 0.162), and preprocessing did not improve CER by 5 points — it is
-  roughly neutral, and worse on `heavy`. Reported as a result, not deferred.
-- **The criteria were written against the wrong metric.** Deskew raises *word
-  accuracy* 21 points on heavy pages while nudging CER the wrong way. Word
-  accuracy is what Phase 2 depends on, because extraction needs to know *which
-  field* a value belongs to, and that is spatial.
+  `medium` is 0.0812 against a 0.0800 target; `heavy` is 0.4284), and
+  preprocessing improves CER on `heavy` only, by 1.1 points. Reported as a
+  result, not deferred.
+- **The criteria were written against the wrong metric.** The full chain minus
+  binarisation raises *word accuracy* 14.1 points on heavy pages while nudging
+  CER the wrong way. Word accuracy is what Phase 2 depends on, because
+  extraction needs to know *which field* a value belongs to, and that is
+  spatial.
+- **The first sweep, at n = 4, ranked the pipelines wrongly.** Re-running at
+  n = 15 changed which pipeline wins in 4 of 6 metric/profile cells, and the
+  headline deskew effect on `heavy` shrank from +21.6 to +11.0 points. Every
+  qualitative conclusion survived; no magnitude did. Per-cell variance at n = 4
+  exceeded the differences the ranking was built on, which is a caution about
+  every thin cell in this project, not just that one.
+- **Preprocessing is a net loss on clean pages** (word accuracy 0.5733 raw
+  versus 0.4842 for the full chain) and the pipeline applies it
+  unconditionally. Nothing decides whether a page is degraded enough to need
+  it.
 - **Detection metrics penalise tokenisation, not just recognition.** PaddleOCR
   splits punctuation into separate tokens (`Salai` `,`), so predicted word
   counts run ~1.8x gold and precision drops for reasons unrelated to reading
@@ -149,9 +161,12 @@ stale.** The demo renders "not run" rather than showing the superseded figures.
 | Phase 3 | 100 ledger / 50 evaluation |
 | Phase 4 | 100 history / 50 evaluation |
 
-Phase 1 is the thin one. The 21-point deskew effect on word accuracy is large
-enough to trust at this n; the small CER differences between adjacent pipeline
-rows are not, and should not be quoted as precise.
+Phase 1 is the thin one, and it is the one case where the thinness has been
+measured rather than assumed: the first sweep ran at n = 4 and got the pipeline
+ranking wrong in 4 of 6 cells. At n = 15 the 14-point word-accuracy effect on
+`heavy` is well clear of the noise; differences under about 2 points between
+adjacent pipeline rows are not, and should be read as ties rather than as an
+ordering.
 
 ---
 

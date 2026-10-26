@@ -11,32 +11,42 @@ improve CER by ≥ 5 absolute points versus the raw degraded page.
 
 ## Results
 
-PaddleOCR 3.7 (PP-OCRv5 mobile, CPU), 4 documents per cell, 3 degradation
-profiles. Reproduce with `make ablation ENGINE=paddle`.
+PaddleOCR 3.7 (PP-OCRv5 mobile, CPU), **15 documents per cell**, 3 degradation
+profiles, 92.6 minutes wall clock. Reproduce with `make ablation ENGINE=paddle`.
+
+> These numbers replace an earlier sweep at n = 4. The re-run did not merely
+> tighten them — **it changed which pipeline wins in 4 of the 6 metric/profile
+> cells.** See [n = 4 was misleading, not just imprecise](#n--4-was-misleading-not-just-imprecise)
+> below, because that is a finding about the experiment rather than about the
+> pipeline.
 
 ### Normalised CER — preprocessing does not help, and binarisation hurts badly
 
 | Pipeline | clean | medium | heavy |
 |---|---|---|---|
-| `raw` | **0.0046** | 0.1738 | **0.3687** |
-| `gray+border+deskew` | 0.0042 | **0.1618** | 0.4294 |
-| `full(no-binarize)` | 0.0061 | 0.2330 | 0.4275 |
-| `full+sauvola` | 0.0228 | 0.4300 | 0.4589 |
+| `raw` | 0.0066 | **0.0812** | 0.4390 |
+| `gray+border+deskew` | 0.0066 | 0.0845 | 0.4641 |
+| `full(no-binarize)` | 0.0083 | 0.1124 | **0.4284** |
+| `full+sauvola` | 0.0365 | 0.1459 | 0.5415 |
 
 ### Word accuracy (located *and* read correctly) — preprocessing helps a lot
 
 | Pipeline | clean | medium | heavy |
 |---|---|---|---|
-| `raw` | **0.5810** | 0.3056 | 0.2731 |
-| `gray+border+deskew` | 0.5347 | **0.4190** | **0.4792** |
-| `full(no-binarize)` | 0.4560 | 0.4074 | 0.4769 |
-| `full+sauvola` | 0.5093 | 0.3495 | 0.4167 |
+| `raw` | **0.5733** | 0.4281 | 0.1651 |
+| `gray+border+deskew` | 0.5562 | 0.4616 | 0.2747 |
+| `full(no-binarize)` | 0.4842 | **0.4918** | **0.3062** |
+| `full+sauvola` | 0.4938 | 0.4596 | 0.2452 |
 
 ### The two metric families disagree, and that is the finding
 
-On heavily degraded pages, `deskew` **raises word accuracy from 0.273 to 0.479
-(+21 points)** and detection F1 from 0.294 to 0.528 — while making CER slightly
-*worse*. That is not a contradiction; the metrics measure different things:
+Against the raw degraded page, the full chain minus binarisation **raises word
+accuracy by 14.1 points on `heavy` (0.1651 → 0.3062) and 6.4 points on
+`medium` (0.4281 → 0.4918)** while moving CER by −1.1 points and +3.1 points
+respectively. Deskew alone accounts for most of the heavy gain (+11.0 points).
+
+So the two metric families point in opposite directions on exactly the pages
+that matter. That is not a contradiction; they measure different things:
 
 - **CER is text-only.** A modern detector reads a skewed page perfectly well;
   the characters come out right even when the page is at 5 degrees.
@@ -48,20 +58,30 @@ On heavily degraded pages, `deskew` **raises word accuracy from 0.273 to 0.479
 **Word accuracy is the metric that matters downstream.** Phase 2 extraction
 needs to know *which field* a value belongs to, and that is a spatial question
 — a correctly-read total in the wrong place is not a usable extraction. So the
-honest summary is: deskewing earns its place, and CER alone would have hidden
-that.
+honest summary is: preprocessing earns its place on degraded pages, and CER
+alone would have hidden that.
 
-### Against the exit criteria — both failed
+One thing to be careful about: **on clean pages preprocessing is a net loss**
+(word accuracy 0.5733 raw versus 0.5562 deskewed and 0.4842 for the full
+chain). The chain should be applied on evidence of degradation, not
+unconditionally. Nothing in the pipeline currently makes that decision.
 
-| Criterion | Result |
+### Against the exit criteria — both still failed
+
+| Criterion | Result at n = 15 |
 |---|---|
-| CER < 8% on the noisy subset | **FAILED.** Best `medium` CER is 0.162; best `heavy` is 0.369. Clean passes easily at 0.005. |
-| Preprocessing improves CER by >= 5 points | **FAILED.** Best CER delta from preprocessing is −1.2 points (medium); on heavy it is +6 points *worse*. |
+| CER < 8% on the noisy subset | **FAILED,** but narrowly on `medium`: best is **0.0812** against a 0.0800 target — short by 0.12 of a point. `heavy` is nowhere near, at 0.4284. Clean passes easily at 0.0066. |
+| Preprocessing improves CER by ≥ 5 points | **FAILED.** The only profile where preprocessing improves CER at all is `heavy`, by **1.1 points** (`full(no-binarize)`, 0.4390 → 0.4284). On `medium` the best preprocessed row is 0.3 points *worse* than raw, and on `clean` 0.0. |
 
 Stating this plainly rather than reframing: **the pipeline as specified did not
 meet its targets.** What it did establish is that the targets were written for
 the wrong metric — the criterion should be word accuracy, where preprocessing
-delivers +21 points on the hardest pages.
+delivers +14.1 points on the hardest pages.
+
+The n = 4 sweep reported `medium` CER as 0.162, so this looked like a failure by
+a factor of two. At n = 15 it is 0.0812. The conclusion does not change, but the
+*size* of the miss was overstated by the thin sample, and a report quoting 0.162
+as the achievable figure would be wrong.
 
 ### Why classical preprocessing backfires on a modern detector
 
@@ -70,28 +90,66 @@ denoising are prerequisites. PaddleOCR's detector is a CNN trained on
 photographs of real documents; it does its own normalisation internally and
 expects continuous-tone input. Sauvola binarisation throws away the grayscale
 information it was trained to use, which is why `full+sauvola` is the worst row
-in every CER column (0.43 on medium, versus 0.17 raw — a 25-point
-regression). This is consistent with refs [3] and [7] recommending hybrid
+in every CER column — 0.1459 on medium against 0.0812 raw, and 0.5415 on heavy
+against 0.4390. This is consistent with refs [3] and [7] recommending hybrid
 image+text input rather than aggressive cleanup.
+
+(At n = 4 the same row read 0.4300 on medium against 0.1738 raw, which looked
+like a 25-point collapse. The direction held; the magnitude did not.)
 
 ### Cost
 
 | Pipeline | preprocessing ms/page |
 |---|---|
 | `raw` | 0 |
-| `gray+border+deskew` | 152 |
-| `full(no-binarize)` | 587 |
-| `full+sauvola` | 1053 |
+| `gray+border+deskew` | 155 |
+| `full(no-binarize)` | 584 |
+| `full+sauvola` | 1219 |
 
 OCR itself dominates at ~40 s/page (CPU, mkldnn disabled — see below), so
 preprocessing cost is not the constraint; correctness is.
 
+### n = 4 was misleading, not just imprecise
+
+The first sweep ran 4 documents per cell because the whole cross product costs
+an hour and a half of CPU. The caveat at the time said the small CER deltas
+should not be quoted as precise. That was too generous: re-running at n = 15
+changed **which pipeline wins** in 4 of the 6 metric/profile cells.
+
+| Metric | Profile | Best at n = 4 | Best at n = 15 |
+|---|---|---|---|
+| CER | clean | `gray+border+deskew` | `gray+border+deskew` (tied with `raw`) |
+| CER | medium | `gray+border+deskew` | **`raw`** |
+| CER | heavy | `raw` | **`full(no-binarize)`** |
+| Word accuracy | clean | `raw` | `raw` |
+| Word accuracy | medium | `gray+border+deskew` | **`full(no-binarize)`** |
+| Word accuracy | heavy | `gray+border+deskew` | **`full(no-binarize)`** |
+
+Individual cells moved by more than the gaps the ranking was built on. `raw` CER
+on medium halved (0.1738 → 0.0812). `full+sauvola` on medium fell by 28 points
+(0.4300 → 0.1459). Word accuracy on `heavy` dropped across every row, so the
+headline deskew effect shrank from +21.6 points to +11.0 — still large, still
+the same conclusion, but not the same number.
+
+**What survived:** binarisation hurts; preprocessing helps word accuracy on
+degraded pages and hurts it on clean ones; CER and word accuracy disagree; both
+exit criteria fail. Every qualitative claim held. **What did not:** the specific
+best-pipeline-per-profile recommendation, and the magnitude of nearly every
+effect.
+
+The lesson is about the experiment, not the pipeline: at n = 4 the per-cell
+variance exceeded the differences being measured, which makes a ranking table
+an artefact of which 4 documents were drawn. n = 15 is reported here; it is
+still thin, and the caveat below stands.
+
 ### Caveats on these numbers
 
-- **n = 4 documents per cell.** The whole sweep took 100 minutes on CPU. The
-  deskew effect on `heavy` (+21 points word accuracy) is large enough to be
-  credible at this n; the smaller CER deltas are not, and should not be quoted
-  as precise.
+- **n = 15 documents per cell**, 92.6 minutes on CPU. Adjacent rows differ by
+  less than a point in several cells — `raw` and `gray+border+deskew` on clean
+  CER are identical to 4 decimal places — and those differences should not be
+  quoted as orderings. The large effects (binarisation hurting, preprocessing
+  gaining 14 points of word accuracy on `heavy`) are well clear of the noise.
+  Treat anything under ~2 points as a tie.
 - **Detection metrics penalise tokenisation differences.** PaddleOCR splits
   punctuation into separate tokens (`Salai` `,`), so predicted word counts run
   ~1.8x gold. That depresses precision independently of recognition quality,
