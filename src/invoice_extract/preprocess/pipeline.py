@@ -216,3 +216,29 @@ def get_config(name: str) -> PipelineConfig:
     if name not in CONFIGS_BY_NAME:
         raise KeyError(f"unknown pipeline config {name!r}; have {sorted(CONFIGS_BY_NAME)}")
     return CONFIGS_BY_NAME[name]
+
+
+#: The one config that is not a fixed stage list. `adaptive` measures each page
+#: and picks its own stages, so it has no `PipelineConfig` to look up.
+ADAPTIVE = "adaptive"
+
+
+def make_pipeline(name: str):
+    """Build a pipeline by name, fixed or adaptive.
+
+    Every caller went through `Pipeline(get_config(name))`, which cannot
+    express a per-page decision. Routing construction through here lets
+    `adaptive` appear anywhere a config name appears -- the ablation runner,
+    the extraction runner, the demo cache -- without any of them knowing that
+    one of the options chooses its own stages per page.
+    """
+    if name == ADAPTIVE:
+        from invoice_extract.preprocess.triage import AdaptivePipeline
+
+        return AdaptivePipeline()
+    return Pipeline(get_config(name))
+
+
+def config_names(include_adaptive: bool = True) -> list[str]:
+    names = [c.name for c in ABLATION_CONFIGS + VARIANT_CONFIGS]
+    return names + [ADAPTIVE] if include_adaptive else names

@@ -63,6 +63,42 @@ FRAUD_KINDS = (
     "duplicate_payment",
 )
 
+#: Scenarios deliberately NOT designed for, kept as a permanent probe against
+#: circularity. Phase 3 carries the same construct and both of its held-out
+#: scenarios score zero; without one here, Phase 4's recall of 1.000 only says
+#: that four checks catch the four scenarios they were written to catch.
+#:
+#: These two are chosen because each is blind in a *different* way from the
+#: designed four, not merely harder:
+#:
+#: - `invoice_splitting` is a pattern across invoices. Every individual
+#:   document is impeccable -- known vendor, contract price, matching bank,
+#:   arithmetic reconciles -- and the fraud exists only in the sequence. The
+#:   one check that looks across invoices, `possible_duplicate_payment`, keys
+#:   on an identical total, which splitting specifically avoids.
+#: - `quantity_inflation` exploits an asymmetry in what gets validated. The
+#:   unit price is left at exactly the contract rate and every total is
+#:   recomputed consistently, so `price_deviation` has nothing to object to and
+#:   the arithmetic reconciles. The lie is the quantity, and there is no
+#:   quantity-conformance check -- the project validates what a vendor charges
+#:   per unit but never how many units it claims to have delivered.
+#:
+#: Expect 0/n on both. Closing them and re-reporting 100% would reproduce the
+#: circularity they exist to expose, so they are reported separately and left
+#: unfixed. See docs/phase4_validation.md.
+HELD_OUT_KINDS = (
+    "invoice_splitting",
+    "quantity_inflation",
+)
+
+#: The ceiling `invoice_splitting` aims to sit under. Arbitrary -- this corpus
+#: has no approval policy -- but it has to be a number for the scenario to be
+#: constructible. Set between the 25th and 50th percentile of grand totals
+#: (16,440 and 49,452), so enough invoices are large enough to be worth
+#: splitting. At the median only one case was constructible in a 50-document
+#: evaluation, which is too few to report 0/n from.
+APPROVAL_THRESHOLD = 25_000.0
+
 #: Which check is evidence for which injected scenario.
 CHECK_TO_KIND = {
     "bank_account_changed": "redirected_bank_account",
@@ -126,6 +162,78 @@ def inject(doc: dict, kind: str, rng: random.Random, master: VendorMaster, histo
         doc.setdefault("totals", {})["grand_total"] = donor["totals"]["grand_total"]
         doc.setdefault("invoice_meta", {})["invoice_date"] = donor["invoice_meta"]["invoice_date"]
 
+    elif kind == "invoice_splitting":
+        # One purchase broken into pieces that each sit under an approval
+        # threshold. The total is reduced to just below it and a sibling
+        # invoice number is minted, so the pair reads as two ordinary small
+        # purchases. Nothing on either document is wrong.
+        if not record:
+            return None
+        totals = doc.get("totals") or {}
+        grand = totals.get("grand_total")
+        if grand is None or grand < APPROVAL_THRESHOLD:
+            return None
+        share = round(APPROVAL_THRESHOLD * rng.uniform(0.88, 0.98), 2)
+        scale = share / grand
+        totals["grand_total"] = share
+        for key in ("subtotal", "tax_total", "discount_total", "shipping", "round_off"):
+            if totals.get(key) is not None:
+                totals[key] = round(float(totals[key]) * scale, 2)
+        for item in doc.get("line_items") or []:
+            for key in ("line_total", "tax_amount"):
+                if item.get(key) is not None:
+                    item[key] = round(float(item[key]) * scale, 2)
+            # Quantity shrinks, unit price does not: the contract rate is
+            # untouched, so price conformance has nothing to object to.
+            if item.get("quantity") is not None and item.get("unit_price"):
+                item["quantity"] = max(1, int(round(float(item["quantity"]) * scale)))
+        meta = doc.setdefault("invoice_meta", {})
+        if meta.get("invoice_number"):
+            meta["invoice_number"] = f"{meta['invoice_number']}-A"
+
+    elif kind == "quantity_inflation":
+        # Charge the right rate for units that were never delivered. Unit price
+        # is untouched, so price conformance passes; everything downstream is
+        # recomputed from the inflated quantity, so the arithmetic reconciles.
+        if not record:
+            return None
+        items = [
+            i
+            for i in (doc.get("line_items") or [])
+            if i.get("quantity") and i.get("unit_price") and i.get("line_total") is not None
+        ]
+        if not items:
+            return None
+        item = rng.choice(items)
+        factor = rng.randint(3, 6)
+        before = float(item["line_total"])
+        item["quantity"] = float(item["quantity"]) * factor
+        item["line_total"] = round(float(item["unit_price"]) * float(item["quantity"]), 2)
+        if item.get("discount"):
+            item["line_total"] = round(item["line_total"] - float(item["discount"]), 2)
+        delta = item["line_total"] - before
+
+        rate = item.get("tax_rate")
+        totals = doc.setdefault("totals", {})
+        if totals.get("subtotal") is not None:
+            totals["subtotal"] = round(float(totals["subtotal"]) + delta, 2)
+        tax_delta = 0.0
+        if rate:
+            tax_delta = round(delta * float(rate) / 100.0, 2)
+            if item.get("tax_amount") is not None:
+                item["tax_amount"] = round(float(item["tax_amount"]) + tax_delta, 2)
+            # Spread across the components actually shown (CGST+SGST, or IGST).
+            lines = [t for t in (doc.get("tax_lines") or []) if t.get("amount") is not None]
+            for tax_line in lines:
+                tax_line["amount"] = round(
+                    float(tax_line["amount"]) + tax_delta / len(lines),
+                    2,
+                )
+            if totals.get("tax_total") is not None:
+                totals["tax_total"] = round(float(totals["tax_total"]) + tax_delta, 2)
+        if totals.get("grand_total") is not None:
+            totals["grand_total"] = round(float(totals["grand_total"]) + delta + tax_delta, 2)
+
     elif kind == "impostor_vendor":
         # A supplier nobody has ever billed with -- the classic shell-company
         # invoice. Name and GSTIN both unknown, so neither resolves.
@@ -146,6 +254,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--corpus", type=Path, default=Path("data/processed/gst_in_synthetic"))
     ap.add_argument("--history-size", type=int, default=100)
     ap.add_argument("--fraud-rate", type=float, default=0.4)
+    ap.add_argument(
+        "--held-out-rate",
+        type=float,
+        default=0.5,
+        help="Rate at which HELD_OUT_KINDS are injected among the documents not "
+        "already carrying a designed-for scenario. High on purpose: the probe "
+        "needs enough cases to say 0/n credibly.",
+    )
     ap.add_argument("--seed", type=int, default=20261025)
     ap.add_argument("--out", type=Path, default=Path("reports/phase4_validation"))
     ap.add_argument(
@@ -219,15 +335,24 @@ def main(argv: list[str] | None = None) -> int:
     clean_total = 0
     new_supplier = 0
     tp = fp = fn = 0
+    held_tp = held_fn = 0
     per_kind = defaultdict(lambda: {"injected": 0, "detected": 0})
     verdicts: Counter = Counter()
     fp_examples = []
 
+    # Held-out scenarios are drawn from their own pool at their own rate, so
+    # adding them cannot change how often a designed-for scenario is injected.
+    # Sharing one pool would move the designed-for recall as a side effect of
+    # adding a probe, and then the two readings would not be comparable.
     for doc in evaluation:
         probe = json.loads(json.dumps(doc))
         injected: set[str] = set()
         if rng.random() < args.fraud_rate:
             kind = rng.choice(FRAUD_KINDS)
+            if inject(probe, kind, rng, master, history) is not None:
+                injected.add(kind)
+        elif rng.random() < args.held_out_rate:
+            kind = rng.choice(HELD_OUT_KINDS)
             if inject(probe, kind, rng, master, history) is not None:
                 injected.add(kind)
 
@@ -241,7 +366,15 @@ def main(argv: list[str] | None = None) -> int:
                 per_kind[kind]["detected"] += 1
 
         if injected:
-            if raised & injected:
+            # A held-out case is credited only if a check *attributable to it*
+            # fires. Counting "the document was flagged for some reason" would
+            # let an unrelated check take credit, which is exactly the kind of
+            # accidental pass this probe exists to rule out.
+            caught = bool(raised & injected)
+            if injected & set(HELD_OUT_KINDS):
+                held_tp += caught
+                held_fn += not caught
+            elif caught:
                 tp += 1
             else:
                 fn += 1
@@ -268,6 +401,12 @@ def main(argv: list[str] | None = None) -> int:
 
     precision = tp / (tp + fp) if (tp + fp) else float("nan")
     recall = tp / (tp + fn) if (tp + fn) else float("nan")
+    # The honest overall figure. The designed-for recall above answers "do the
+    # four checks catch the four scenarios they were written for", which is a
+    # weaker question than it looks.
+    held_total = held_tp + held_fn
+    recall_all = (tp + held_tp) / (tp + fn + held_total) if (tp + fn + held_total) else float("nan")
+    held_recall = held_tp / held_total if held_total else float("nan")
     # Denominator excludes new suppliers: flagging those is the intended
     # behaviour, and leaving them in would make this metric measure how many
     # first-time vendors the split happens to contain.
@@ -293,6 +432,14 @@ def main(argv: list[str] | None = None) -> int:
         "validation": {
             "precision": precision,
             "recall": recall,
+            "recall_designed_for_only": recall,
+            "recall_including_held_out": recall_all,
+            "held_out": {
+                "kinds": list(HELD_OUT_KINDS),
+                "injected": held_total,
+                "detected": held_tp,
+                "recall": held_recall,
+            },
             "false_positive_rate_on_clean": fp_rate,
             "clean_documents": clean_total,
             "clean_from_known_vendors": scored_clean,
@@ -338,7 +485,8 @@ def main(argv: list[str] | None = None) -> int:
         "| Metric | Value |",
         "|---|---|",
         f"| Precision | **{f(precision)}** |",
-        f"| Recall | **{f(recall)}** |",
+        f"| Recall, designed-for scenarios only | **{f(recall)}** |",
+        f"| Recall, including held-out scenarios | **{f(recall_all)}** |",
         f"| False-positive rate (clean, known vendor) | **{f(fp_rate)}** |",
         f"| Clean invoices wrongly flagged | {clean_flagged} / {scored_clean} |",
         f"| New-supplier reviews (correct, not errors) | {new_supplier} |",
@@ -349,6 +497,28 @@ def main(argv: list[str] | None = None) -> int:
     for kind in FRAUD_KINDS:
         counts = per_kind.get(kind, {"injected": 0, "detected": 0})
         md.append(f"| `{kind}` | {counts['detected']} | {counts['injected']} |")
+    md += [
+        "",
+        "### Held-out scenarios",
+        "",
+        "Not designed for, and kept unfixed on purpose. The recall above these is "
+        "the answer to *do the four checks catch the four things they were written "
+        "for*, which is a weaker question than it looks. These two are the answer "
+        "to *what does this system not see*.",
+        "",
+        "| Held-out scenario | Caught | Injected |",
+        "|---|---|---|",
+    ]
+    for kind in HELD_OUT_KINDS:
+        counts = per_kind.get(kind, {"injected": 0, "detected": 0})
+        md.append(f"| `{kind}` | **{counts['detected']}** | {counts['injected']} |")
+    md += [
+        "",
+        "`invoice_splitting` is a pattern across invoices and every single document "
+        "in it is impeccable. `quantity_inflation` exploits the project validating "
+        "what a vendor charges per unit but never how many units it claims to have "
+        "delivered. Both are ordinary AP fraud.",
+    ]
     md += [
         "",
         "| Verdict | Count |",
@@ -364,7 +534,8 @@ def main(argv: list[str] | None = None) -> int:
         f"{res_unresolved} unresolved)"
     )
     print(
-        f"Validation   P {f(precision)} / R {f(recall)}, "
+        f"Validation   P {f(precision)} / R {f(recall)} designed-for, "
+        f"{f(recall_all)} incl. held-out ({held_tp}/{held_total}), "
         f"FP rate (clean, known vendor) {f(fp_rate)}"
     )
     print(

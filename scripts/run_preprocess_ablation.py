@@ -48,9 +48,10 @@ from invoice_extract.ocr.base import (  # noqa: E402
 )
 from invoice_extract.preprocess.pipeline import (  # noqa: E402
     ABLATION_CONFIGS,
+    ADAPTIVE,
     VARIANT_CONFIGS,
-    Pipeline,
     get_config,
+    make_pipeline,
 )
 from invoice_extract.reading_order import reading_order_text  # noqa: E402
 
@@ -171,9 +172,17 @@ def main(argv: list[str] | None = None) -> int:
     profiles = args.profiles or sorted({r["profile"] for r in manifest})
 
     if args.configs:
-        configs = [get_config(c) for c in args.configs]
+        # Validate every name up front rather than failing an hour into a
+        # sweep. `adaptive` is not in CONFIGS_BY_NAME because it has no fixed
+        # stage list -- it measures each page and chooses.
+        for name in args.configs:
+            if name != ADAPTIVE:
+                get_config(name)
+        configs = list(args.configs)
     else:
-        configs = list(ABLATION_CONFIGS) + ([] if args.no_variants else list(VARIANT_CONFIGS))
+        configs = [c.name for c in ABLATION_CONFIGS]
+        if not args.no_variants:
+            configs += [c.name for c in VARIANT_CONFIGS]
 
     engine_kwargs = {}
     for pair in args.engine_arg:
@@ -203,8 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     total_cells = len(configs) * len(profiles)
     cell = 0
 
-    for cfg in configs:
-        pipeline = Pipeline(cfg)
+    for name in configs:
+        pipeline = make_pipeline(name)
         for profile in profiles:
             cell += 1
             rows = by_profile.get(profile, [])
@@ -253,10 +262,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
             agg = aggregate_ocr(reports)
-            record = {"config": cfg.name, "profile": profile, "n_docs": agg.n_docs, **agg.as_dict()}
+            record = {"config": name, "profile": profile, "n_docs": agg.n_docs, **agg.as_dict()}
             results.append(record)
             print(
-                f"[{cell}/{total_cells}] {cfg.name:<34} {profile:<7} "
+                f"[{cell}/{total_cells}] {name:<34} {profile:<7} "
                 f"CER={fmt(agg.cer_norm, 4)} WER={fmt(agg.wer_norm, 4)} "
                 f"detF1={fmt(agg.det_f1, 3)} pre={agg.mean_preprocess_ms:.0f}ms "
                 f"ocr={agg.mean_ocr_ms:.0f}ms",
@@ -280,7 +289,12 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     ladder = [c.name for c in ABLATION_CONFIGS if any(r["config"] == c.name for r in results)]
+    # `adaptive` is not a rung: it is not the row above it plus one stage, so a
+    # per-stage delta against it would not mean anything. Tabulated with the
+    # variants instead.
     variants = [c.name for c in VARIANT_CONFIGS if any(r["config"] == c.name for r in results)]
+    if any(r["config"] == ADAPTIVE for r in results):
+        variants.append(ADAPTIVE)
 
     md = [f"# Phase 1 preprocessing ablation ({args.engine})", ""]
     if args.engine == "oracle":
