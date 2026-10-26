@@ -162,19 +162,23 @@ limitation. What remains a limitation is everything around it:
 - **The pipeline ranking is not a property of the pipeline.** It moved when n
   went 4 → 15 (4 of 6 cells) and again when the recognition model changed (3 of
   4 cells). Any "pipeline X is best" claim here is conditional on both.
-- **The adaptive preprocessing policy buys a tie, not the best-of-both it was
-  designed for.** Measured: it matches `raw` exactly on clean pages (0.5733, so
-  the 8.9-point penalty is gone) but gives up 4.9 points of word accuracy on
-  `medium` and 3.9 on `heavy` against the fixed full chain, and ties it on the
-  mean across profiles (0.4279 vs 0.4274) while costing ~350 ms more per page.
+- **The adaptive preprocessing policy now achieves best-of-both, after being
+  rewritten.** It matches the best measured word accuracy in every profile
+  (clean 0.5733, medium 0.4918, heavy 0.3062) and beats the better fixed
+  configuration by 3.0 points on the mean.
 
-  The cause is identified and not fixed: the `upscale` gate is keyed on
-  Laplacian variance, and heavy speckle keeps that variance high even after the
-  median filter the signal is measured on, so `upscale` often fails to fire on
-  the pages that most need it. One gate is blind in the one regime where it
-  matters. Kept because it is the only configuration best on clean pages while
-  staying close on degraded ones, but it is machinery that has not yet paid for
-  itself.
+  The first version gated each stage independently and bought only a tie. The
+  cause was structural, not a mis-set threshold: `ABLATION_CONFIGS` is a
+  cumulative ladder and the +14.1 points belongs to the whole chain, so an
+  independently-composed subset could never reach it. The policy now decides
+  only whether a page is degraded and applies `raw` or `full(no-binarize)`
+  accordingly — both measured.
+
+  Remaining costs, both real: triage runs on top of the chain it selects, so a
+  degraded page pays ~1,342 ms against 618 for the fixed chain (about 3% of a
+  page's OCR time); and it inherits `full(no-binarize)`'s **CER**, which is
+  worse than `raw`'s on medium. Quote CER from the fixed configurations, not
+  from `adaptive`.
 - **Its calibration is against the mobile models**, and the picture changes
   with better recognition in a way that cuts against the policy: with v6-medium
   on `heavy`, preprocessing is worth **+22 points** of word accuracy (0.3077

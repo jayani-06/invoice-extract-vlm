@@ -197,44 +197,78 @@ means nothing. The large effects — the 7-fold medium CER drop and the ~15-poin
 word-accuracy gain across every row — are far too big to be sampling noise. The
 per-cell orderings are not.
 
-### Does the adaptive policy earn its place? Partly.
+### Does the adaptive policy earn its place? Yes, after one rewrite.
 
 `preprocess/triage.py` exists because preprocessing is worth +14.1 points of
 word accuracy on `heavy` and **−8.9 on `clean`**, and the pipeline applied it
-unconditionally. Measured against the two fixed configs it sits between,
-15 documents per cell, mobile models:
+unconditionally. The first version gated each stage independently on the
+signal that stage addresses. Measured, 15 documents per cell, mobile models:
 
 | Word accuracy | clean | medium | heavy | mean |
 |---|---|---|---|---|
 | `raw` | **0.5733** | 0.4281 | 0.1651 | 0.3888 |
 | `full(no-binarize)` | 0.4842 | **0.4918** | **0.3062** | 0.4274 |
-| `adaptive` | **0.5733** | 0.4432 | 0.2671 | **0.4279** |
+| `adaptive` — v1, composing stages | **0.5733** | 0.4432 | 0.2671 | 0.4279 |
+| **`adaptive` — v2, selecting a config** | **0.5733** | **0.4918** | **0.3062** | **0.4571** |
 
-**It does not recover best-of-both, and that is reported rather than
-presented as a success.** It does exactly what it was built to do on clean
-pages -- 0.5733, identical to `raw`, so the 8.9-point penalty is gone -- but it
-gives up **4.9 points on `medium`** and **3.9 on `heavy`** against the fixed
-full chain. On the mean across profiles it ties `full(no-binarize)`
-(0.4279 vs 0.4274), which is a tie, not a win.
+**v1 bought a tie. v2 achieves best-of-both: it matches the best measured
+number in every profile**, and beats the better fixed configuration by 3.0
+points on the mean.
 
-It does win CER on `heavy` outright (0.4030, better than either fixed config),
-and it costs more: triage adds ~350 ms, so `adaptive` on heavy is 917 ms
-against 618 ms for the fixed chain.
+#### Why v1 fell short, and why no threshold would have fixed it
 
-**Why it under-performs on degraded pages, precisely.** The gates fire
-independently, so `adaptive` runs a *subset* of the full chain. On `heavy` the
-`upscale` gate is keyed on Laplacian variance, and heavy speckle keeps that
-variance high even after the median filter the signal is measured on -- so
-`upscale` often does not fire on exactly the pages that need it most. The
-policy is therefore not mis-calibrated in general; one gate is blind in the
-one regime where it matters.
+The obvious diagnosis was a mis-set gate — `upscale` keys on Laplacian
+variance, and heavy speckle keeps that variance high even after the median
+filter the signal is measured on, so it often failed to fire on exactly the
+pages that needed it. That is true, and it is not the real problem.
 
-**Verdict:** keep it, because it is the only configuration that is best on
-clean pages while staying close on degraded ones, and the clean case is the
-common one in production. But it buys a tie rather than the best-of-both the
-design predicted, and the `upscale` gate needs a signal that survives heavy
-noise before that changes. Recorded as an open limitation, not fixed by
-adjusting a threshold until the table looked better.
+`ABLATION_CONFIGS` is a **cumulative ladder**. The +14.1 points was measured
+for the *whole chain*; it is not the sum of five independent stage
+contributions that can be picked from à la carte. An independently-composed
+subset of a ladder gets less than the ladder, so v1 was structurally incapable
+of reaching the full chain's number no matter how its gates were tuned.
+Chasing the `upscale` threshold would have meant fitting one gate at a time to
+a quantity that belongs to the whole, which is a good way to spend an
+afternoon manufacturing a number.
+
+#### What v2 does instead
+
+The policy's job is reduced to the one thing calibration showed it does well:
+decide whether the page is degraded at all (clean 2/30 preprocessed, degraded
+30/30). It then applies the configuration **measured best for that class**:
+
+| Evidence | Configuration | Why that one |
+|---|---|---|
+| no signal fires | `raw` | best measured on clean, 0.5733 against 0.4842 |
+| any signal fires | `full(no-binarize)` | best measured on medium (0.4918) and heavy (0.3062) |
+
+Every branch now has a measured number behind it rather than being an
+untested combination. `full+sauvola` is unreachable by construction.
+
+The per-stage evidence is still produced and still surfaced — a review UI has
+to show *why* a page was treated as degraded — it simply no longer builds the
+pipeline.
+
+#### What it costs
+
+| Preprocessing ms/page | clean | medium | heavy |
+|---|---|---|---|
+| `full(no-binarize)` | 622 | 625 | 618 |
+| `adaptive` v2 | 404 | 1209 | 1342 |
+
+Triage runs *on top of* the chain it selects, so a degraded page pays roughly
+double. Against ~40,000 ms of OCR per page that is about 3%, but it is real
+and it is the honest cost of the decision. On clean pages it is a net saving,
+because the chain it skips costs more than the triage that skipped it.
+
+#### What it still does not fix
+
+CER. `adaptive` v2 inherits `full(no-binarize)`'s CER exactly (0.1124 on
+medium against `raw`'s 0.0812), because it *is* that configuration on those
+pages. v1 happened to score better on heavy CER (0.4030) by running a smaller
+subset. Word accuracy is the metric Phase 2 depends on and the one the policy
+is built around, but anyone quoting CER from this project should use the fixed
+configurations, not `adaptive`.
 
 ### The CER exit criterion fails on `heavy` even with the best models
 

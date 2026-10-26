@@ -61,7 +61,7 @@ PP-OCRv6 medium.
 |---|---|---|---|---|
 | `raw` | **0.5733** | 0.4281 | 0.1651 | 0.3888 |
 | `full(no-binarize)` | 0.4842 | **0.4918** | **0.3062** | 0.4274 |
-| `adaptive` | **0.5733** | 0.4432 | 0.2671 | **0.4279** |
+| `adaptive` | **0.5733** | **0.4918** | **0.3062** | **0.4571** |
 
 ### Against the exit criteria
 
@@ -82,12 +82,13 @@ PP-OCRv6 medium.
 - **The pipeline ranking is not a property of the pipeline.** It changed when
   n went 4 → 15 (4 of 6 cells) and again when the recognition model changed
   (3 of 4 cells). Any "pipeline X is best" claim is conditional on both.
-- **`adaptive` buys a tie, not best-of-both.** It matches `raw` exactly on
-  clean pages — the penalty is gone — but gives up 4.9 points on `medium` and
-  3.9 on `heavy`, ties the best fixed config on the mean, and costs ~350 ms
-  more. The cause is identified: its `upscale` gate is keyed on Laplacian
-  variance, which heavy speckle keeps high, so the gate fails to fire on the
-  pages that most need it.
+- **`adaptive` achieves best-of-both**, matching the best measured word
+  accuracy in every profile and beating the better fixed configuration by 3.0
+  points on the mean. It took a rewrite: the first version gated each stage
+  independently and bought only a tie, because the ladder's +14.1 points
+  belongs to the whole chain and a composed subset of a ladder gets less than
+  the ladder. No threshold tuning could have fixed that. It now decides only
+  whether a page is degraded and applies a measured configuration.
 - **Binarisation always hurts.** `full+sauvola` is the worst row in every CER
   column. PaddleOCR's detector is trained on continuous-tone images.
 
