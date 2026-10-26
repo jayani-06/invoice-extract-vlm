@@ -66,6 +66,20 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
 }
 
 
+#: The configuration a page gets when nothing fires. Measured best on clean
+#: pages: 0.5733 word accuracy, against 0.4842 for the full chain -- the
+#: 8.9-point penalty this whole module exists to avoid paying.
+CLEAN_CONFIG = "raw"
+
+#: And when anything fires. Measured best on both degraded profiles: 0.4918 on
+#: `medium` and 0.3062 on `heavy`, against `raw`'s 0.4281 and 0.1651.
+#:
+#: `full+sauvola` is deliberately not reachable. It is the worst row in every
+#: CER column measured, because PaddleOCR's detector is trained on
+#: continuous-tone images and binarisation discards what it uses.
+DEGRADED_CONFIG = "full(no-binarize)"
+
+
 @dataclass
 class PageCondition:
     """What the page looks like, in the units the thresholds are set in."""
@@ -100,22 +114,43 @@ class TriageDecision:
 
     @property
     def degraded(self) -> bool:
-        """True when anything beyond the free grayscale conversion fired."""
-        return bool(set(self.stages) - {"grayscale"})
+        """True when any signal says this page needs work."""
+        return bool(self.reasons)
 
-    def config(self, name: str = "adaptive") -> PipelineConfig:
-        return PipelineConfig.build(name, list(self.stages))
+    @property
+    def chosen(self) -> str:
+        """The configuration this page gets.
+
+        Deliberately one of two **measured** configurations rather than the set
+        of stages whose gates happened to fire. `ABLATION_CONFIGS` is a
+        cumulative ladder and the +14 points of word accuracy belongs to the
+        whole chain; an independently-composed subset of a ladder gets less
+        than the ladder. Composing stages scored 0.4432 on `medium` where the
+        full chain scored 0.4918, and no threshold adjustment fixes that,
+        because the shortfall is structural rather than a mis-set gate.
+        """
+        return DEGRADED_CONFIG if self.degraded else CLEAN_CONFIG
+
+    def config(self, name: str | None = None) -> PipelineConfig:
+        from invoice_extract.preprocess.pipeline import get_config
+
+        chosen = get_config(self.chosen)
+        if name is None:
+            return chosen
+        return PipelineConfig.build(name, list(chosen.stages), chosen.param_dict())
 
     def explain(self) -> str:
         if not self.reasons:
-            return "page looks clean; no preprocessing applied"
-        return "; ".join(f"{stage}: {why}" for stage, why in sorted(self.reasons.items()))
+            return f"page looks clean; applying {CLEAN_CONFIG}"
+        why = "; ".join(f"{stage}: {reason}" for stage, reason in sorted(self.reasons.items()))
+        return f"applying {DEGRADED_CONFIG} because {why}"
 
     def as_dict(self) -> dict:
         return {
             "condition": self.condition.as_dict(),
-            "stages": list(self.stages),
-            "reasons": dict(self.reasons),
+            "chosen_config": self.chosen,
+            "stages": list(self.config().stages),
+            "evidence": dict(self.reasons),
             "degraded": self.degraded,
         }
 
@@ -250,7 +285,10 @@ def triage(img: Array, thresholds: dict[str, float] | None = None) -> TriageDeci
             return False
         return value > limit if higher_is_worse else value < limit
 
-    stages = ["grayscale"]  # free, and every other stage expects single-channel
+    # `stages` records which stages the evidence points at, for the review UI
+    # and the calibration report. It is no longer what builds the pipeline --
+    # see TriageDecision.chosen.
+    stages = ["grayscale"]
     reasons: dict[str, str] = {}
 
     if gate("border_darkness", c.border_darkness, True):
@@ -315,6 +353,8 @@ class AdaptivePipeline:
 
         decision = triage(img, self.thresholds)
         self.last_decision = decision
+        # One of two measured configurations, chosen by whether the page shows
+        # any sign of degradation.
         result = Pipeline(decision.config())(img)
         # Triage is not free, and a cost table that omitted it would understate
         # the adaptive pipeline against the fixed ones it is compared to.

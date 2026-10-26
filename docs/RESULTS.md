@@ -99,11 +99,16 @@ All `rules` figures are a **perfect-OCR ceiling** (`--ocr-source gold`, the
 renderer's own text). The VLM figures are **genuine end-to-end** — it read
 pixels with no OCR anywhere. The asymmetry favours the baseline.
 
-| Corpus | What it is | `rules` header acc | n |
-|---|---|---|---|
-| `gst_in_synthetic` | our own renderer | **1.000** | 50 |
-| `fatura2` | third-party, 50 synthetic layouts | **0.700** | 50 |
-| `sroie` | **652 real photographed receipts** | **0.777** | 157 |
+| Corpus | What it is | `rules` ceiling | `rules` end-to-end | n |
+|---|---|---|---|---|
+| `gst_in_synthetic` | our own renderer | **1.000** | **0.653** | 50 |
+| `fatura2` | third-party, 50 synthetic layouts | **0.700** | **0.645** | 50 |
+| `sroie` | **652 real photographed receipts** | **0.777** | not measured | 157 |
+
+The two right-hand columns are the single most important thing on this page.
+A perfect-OCR ceiling costs the baseline **34.7 points** on our own corpus and
+**5.5** on FATURA2, so a ceiling figure is not a small overstatement — on home
+turf it is most of the score.
 
 ### The generalisation gap, and the finding that complicates it
 
@@ -124,19 +129,48 @@ train split, declared) moved SROIE test header accuracy 0.684 → **0.777** and
 independently moved FATURA2 0.610 → **0.700**, while our corpus stayed at
 1.000. That cross-corpus transfer is what separates a fix from test-set tuning.
 
-### The VLM
+### The VLM, compared fairly
 
 Qwen2-VL-2B-Instruct, fp16 on a Colab T4, greedy, **vision only**, 100
 documents, 39.3 s each.
 
+Every earlier version of this comparison put the VLM's end-to-end figure
+beside the baseline's perfect-OCR ceiling, and concluded the VLM lost on both
+corpora. **That conclusion was an artefact of the asymmetry.** With the
+baseline re-run through real OCR on the same 50 documents:
+
 | Extractor | ours | FATURA2 | Drop |
 |---|---|---|---|
-| `rules` (ceiling) | 1.000 | 0.700 | −30 pts |
-| `vlm:qwen2-vl-2b` (end-to-end) | 0.843 | 0.432 | **−41 pts** |
+| `rules`, perfect-OCR ceiling | 1.000 | 0.700 | −30 pts |
+| `rules`, **end-to-end** | 0.653 | 0.645 | **−0.8 pts** |
+| `vlm:qwen2-vl-2b`, **end-to-end** | **0.843** | 0.432 | **−41.1 pts** |
 
-**It lost on both corpora and did not close the gap.** A 2B vision-language
-model losing to hand-written regex on clean synthetic invoices is the result,
-and it is kept rather than explained away.
+Two things reverse:
+
+**1. The VLM wins on our layouts, by 19 points.** 0.843 against 0.653, and on
+whole-document critical fields the gap is 0.720 against 0.000 — the regex gets
+*no* document completely right once real OCR is in the loop. The ceiling was
+hiding a 34.7-point penalty that only the baseline pays, because the VLM reads
+pixels and never touches the OCR stage at all.
+
+**2. The regex is the robust one; the VLM is the layout-sensitive one.** This
+is the exact opposite of what the phase predicted. End-to-end, `rules` is
+essentially flat across the two corpora (0.653 → 0.645, −0.8 points) while the
+VLM collapses by 41. The 30-point "generalisation gap" that motivated the whole
+model argument was **mostly a measurement artefact**: it was the gap between
+perfect text and real text, not between home layouts and foreign ones.
+
+The mechanism is clear once stated. Real OCR damages the label anchors the
+regex depends on — a mangled "Invoice No:" costs the field — so the baseline
+falls hard on our corpus. On FATURA2 it was already failing for layout
+reasons, so OCR noise adds almost nothing. The VLM, reading pixels, is immune
+to the OCR stage and pays instead for layouts it has not seen.
+
+**What this does not establish:** that the VLM is better. It wins on
+documents our own renderer made and loses by 21 points on someone else's,
+which is its own generalisation problem. 6 of 100 of its responses did not
+parse and are scored as fully missed documents. And 2B is the smallest preset
+— the 3B/7B presets and the hybrid image+OCR mode are implemented and unrun.
 
 The mechanism the phase proposed is nonetheless real: on FATURA2 the VLM wins
 exactly the fields a label anchor cannot reach — `buyer.name` 0.000 → 0.560,
@@ -252,10 +286,14 @@ unit but never **how many units it claims to have delivered**.
 
 ## The three things to take away
 
-1. **A baseline tuned to its own data tells you nothing about the task.** The
-   regex scores 1.000 on invoices our renderer made and 0.700 on someone
-   else's. Every number in this project is reported against a corpus someone
-   else designed wherever one exists, because of that.
+1. **Comparing a ceiling against an end-to-end figure can invert a
+   conclusion.** For most of this project the headline was "the VLM lost on
+   both corpora". Re-running the baseline through real OCR on the same
+   documents turned that into "the VLM wins by 19 points on our layouts and
+   loses by 21 on someone else's", and turned a 30-point generalisation gap
+   into a 0.8-point one. The gap was mostly the gap between perfect text and
+   real text. Nothing about either system changed — only the fairness of the
+   comparison.
 
 2. **Measuring the wrong thing is worse than measuring badly.** Phase 1's exit
    criteria failed on CER while preprocessing was delivering +22 points of the

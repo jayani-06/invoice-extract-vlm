@@ -185,12 +185,18 @@ limitation. What remains a limitation is everything around it:
 
 ## Phase 2 — extraction
 
-- **Only the VLM has an end-to-end number.** Every `rules` result uses
-  `--ocr-source gold`, which feeds the renderer's own text — a perfect-OCR
-  **ceiling**, not an end-to-end measurement. The VLM run read pixels with no
-  OCR anywhere, so it is the project's only genuine end-to-end figure, and the
-  two are therefore not directly comparable. Re-running the baseline with
-  `--ocr-source engine` is open work and will lower it.
+- **The ceiling-vs-end-to-end asymmetry has been measured, and it inverted the
+  headline.** `rules` with real OCR scores **0.653** on our corpus against its
+  1.000 ceiling, and 0.645 on FATURA2 against 0.700. So the VLM, which was
+  reported as losing on both corpora, in fact **wins on our layouts by 19
+  points** and loses on FATURA2 by 21. The 30-point generalisation gap that
+  motivated the model argument was mostly the gap between perfect text and
+  real text, not between home and foreign layouts.
+
+  Every `rules` figure quoted elsewhere in these docs that is not explicitly
+  marked end-to-end is still a ceiling. **SROIE has no end-to-end number at
+  all** — its 0.777 is a ceiling, and the real-OCR figure for real photographs
+  is the most interesting unmeasured number left in the project.
 - **FATURA2 has no line-item annotations.** Tag 10 is a single `table`
   placeholder covering the whole region, so every converted document carries
   `line_items: []`. The line-item exit criterion is verified **only on our own
