@@ -135,6 +135,10 @@ class VendorMaster:
         #: (vendor, item) pairs appear once in a real ledger, so a per-vendor
         #: rate alone leaves almost every line unchecked.
         self.market_rates: dict[str, ContractRate] = market_rates or {}
+        #: Trading name -> legal entity, as a real supplier master records
+        #: them. Explicit, never inferred: fuzzy merging would join the
+        #: genuinely distinct suppliers whose names are near-identical.
+        self.aliases: dict[str, str] = {}
 
     def __len__(self) -> int:
         return len(self.records)
@@ -142,11 +146,23 @@ class VendorMaster:
     def __contains__(self, name: str) -> bool:
         return name in self.records
 
+    def canonical_name(self, name: str) -> str:
+        """The legal entity a billing name belongs to."""
+        return self.aliases.get((name or "").strip(), (name or "").strip())
+
     def get(self, name: str) -> VendorRecord | None:
-        return self.records.get(name)
+        """Exact lookup, resolving a trading name to its legal entity first."""
+        return self.records.get(self.canonical_name(name))
 
     def names(self) -> list[str]:
-        return list(self.records)
+        """Every billing name the master knows, legal names and trading names.
+
+        Trading names are included because name-similarity matching searches
+        this list: an invoice that arrives as "Anand Ind." with an OCR-mangled
+        spelling has to be able to match the alias, not only the legal name it
+        shares few characters with.
+        """
+        return list(self.records) + [a for a in self.aliases if a not in self.records]
 
     def by_gstin(self, gstin: str) -> VendorRecord | None:
         """GSTIN is the one globally unique vendor identifier, so an exact hit
@@ -159,16 +175,37 @@ class VendorMaster:
     # ------------------------------------------------------------- building
 
     @classmethod
-    def build(cls, documents: list[dict[str, Any]]) -> VendorMaster:
-        """Accrete a supplier file from past accepted invoices."""
+    def build(
+        cls,
+        documents: list[dict[str, Any]],
+        aliases: dict[str, str] | None = None,
+    ) -> VendorMaster:
+        """Accrete a supplier file from past accepted invoices.
+
+        `aliases` maps a trading name to the legal entity it belongs to, the
+        way a real supplier master records them. Without it, a company that
+        bills as both "Anand Industries" and "Anand Ind." produces two records,
+        each with half the history -- so identity checks see a thinner record
+        than exists and price conformance is computed from half the invoices.
+
+        This is NOT fuzzy merging. Names are joined only where the master
+        explicitly says they are the same entity, because guessing would merge
+        the genuinely distinct suppliers whose names are near-identical (the
+        reason `Arjun & Co` and `Arjun Pvt Ltd` are kept apart elsewhere in
+        this module).
+        """
         prices: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
         master = cls()
+        master.aliases = dict(aliases or {})
 
         for doc in documents:
             vendor = (doc.get("parties") or {}).get("vendor") or {}
             name = (vendor.get("name") or "").strip()
             if not name:
                 continue
+            # Fold the trading name into the legal entity before anything is
+            # accreted, so one record carries the whole history.
+            name = master.aliases.get(name, name)
 
             record = master.records.setdefault(name, VendorRecord(name=name))
             record.invoice_count += 1

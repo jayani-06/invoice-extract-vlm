@@ -283,7 +283,16 @@ def main(argv: list[str] | None = None) -> int:
     rng.shuffle(docs)
     history, evaluation = docs[: args.history_size], docs[args.history_size :]
 
-    master = VendorMaster.build(history)
+    # The supplier file is entitled to its own record of trading names; the
+    # generator writes it beside the corpus. Loading it is what separates
+    # "the master knows this company bills under two names" from "the master
+    # thinks they are two companies with half the history each".
+    aliases: dict[str, str] = {}
+    aliases_path = args.corpus / "vendor_aliases.json"
+    if aliases_path.exists():
+        aliases = json.loads(aliases_path.read_text(encoding="utf-8")).get("aliases") or {}
+
+    master = VendorMaster.build(history, aliases=aliases)
 
     # ---------------------------------------------------- vendor resolution
     res_total = res_correct = res_unresolved = 0
@@ -420,6 +429,7 @@ def main(argv: list[str] | None = None) -> int:
         "history_documents": len(history),
         "evaluation_documents": len(evaluation),
         "vendor_master_size": len(master),
+        "trading_names_known": len(aliases),
         "names_corrupted": args.corrupt_names,
         "resolution": {
             "accuracy": res_accuracy,

@@ -39,7 +39,14 @@ CHART_OF_ACCOUNTS: dict[str, Account] = {
 
 UNCATEGORISED = "9999"
 
-#: Ground truth for the generator's ten item descriptions.
+#: Ground truth for the generator's catalogue. Must stay in step with ITEMS in
+#: scripts/generate_synthetic_gst_invoices.py -- tests/test_rag.py asserts
+#: every generated description has a category here, because a description
+#: missing from this map silently becomes UNCATEGORISED gold and the
+#: categoriser is then scored against the wrong answer.
+#:
+#: The confusable pairs are deliberate and are documented beside ITEMS. Each
+#: line below that carries a comment is one the words alone do not settle.
 CANONICAL_ITEM_CATEGORY: dict[str, str] = {
     "A4 Copier Paper (500 sheets)": "5010",
     "Ballpoint Pens (box of 50)": "5010",
@@ -48,9 +55,20 @@ CANONICAL_ITEM_CATEGORY: dict[str, str] = {
     "Wireless Mouse": "5020",
     "Laptop Bag": "5020",
     "USB-C Cable 1m": "5020",
+    "Laptop Docking Station": "5020",  # vs "Software Subscription" -> 5040
     "LED Desk Lamp": "5030",
     "Office Chair": "5030",
     "Steel Filing Cabinet": "5030",
+    "Air Conditioner Unit 1.5T": "5030",  # the asset; its upkeep is 5050
+    "Software Subscription (annual)": "5040",  # IT spend, but a service
+    "Legal Retainer (monthly)": "5040",  # bought-in labour, vs 5050 below
+    "Statutory Audit Fee": "5040",
+    "Annual Maintenance Contract - HVAC": "5050",  # upkeep of the 5030 asset
+    "Contract Labour - Housekeeping": "5050",  # bought-in labour, vs 5040
+    "Electricity Charges": "5050",
+    "Courier Charges (per consignment)": "5060",  # no shared chars with...
+    "Freight Forwarding Service": "5060",  # ...this, same account
+    "Diesel Fuel": "5060",
 }
 
 

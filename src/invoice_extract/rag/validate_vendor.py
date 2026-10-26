@@ -142,7 +142,10 @@ def resolve_vendor(doc: dict[str, Any], master: VendorMaster) -> Resolution:
             # matches perfectly, so the mismatch can never be detected. It
             # scored 0/3 on injected GSTIN swaps. When the name points
             # somewhere else, report the conflict instead of picking a side.
-            if name and name not in (record.name,):
+            # Compare canonical entities, not billing names: an invoice under
+            # a registered trading name is the same supplier, and reading it as
+            # a GSTIN/name conflict would flag every aliased invoice as fraud.
+            if name and master.canonical_name(name) != record.name:
                 by_name = master.get(name)
                 if by_name is None:
                     scored_names = [(c, name_similarity(name, c)) for c in master.names()]

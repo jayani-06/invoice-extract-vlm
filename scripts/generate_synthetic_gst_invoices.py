@@ -62,17 +62,66 @@ FIRST_WORDS = [
     "Meera",
     "Arjun",
 ]
+#: The catalogue vendors bill for.
+#:
+#: The original ten descriptions covered only three of the six accounts in the
+#: chart, and every one of them was unambiguous from its words alone -- which
+#: is why Phase 3 reported macro-F1 0.996. That number measured a ten-way
+#: problem with no hard cases, not categorisation.
+#:
+#: The additions below are chosen to be *genuinely confusable*, because the
+#: hard cases in real accounts payable are near-neighbours rather than unseen
+#: vocabulary:
+#:
+#:   "Software Subscription (annual)"  5040 Professional Services
+#:   "Laptop Docking Station"          5020 IT Equipment
+#:     -- both are "IT spend"; one is a service and one is hardware.
+#:
+#:   "Courier Charges (per consignment)"  5060 Travel & Transport
+#:   "Freight Forwarding Service"         5060 Travel & Transport
+#:     -- same account, almost no shared characters: the case that separates a
+#:        character-n-gram retriever from a semantic one.
+#:
+#:   "Annual Maintenance Contract - HVAC"  5050 Facilities & Utilities
+#:   "Air Conditioner Unit 1.5T"           5030 Furniture & Fixtures
+#:     -- the same subject matter booked to different accounts depending on
+#:        whether it is an asset or its upkeep.
+#:
+#:   "Legal Retainer (monthly)"      5040 Professional Services
+#:   "Contract Labour - Housekeeping" 5050 Facilities & Utilities
+#:     -- both are bought-in labour, split by what the labour is for.
+#:
+#: Expect Phase 3's figures to fall. That is the point: a lower honest number
+#: against a harder label space is the deliverable, and tuning thresholds to
+#: recover 0.996 would put the old defect back.
 ITEMS = [
+    # 5010 Office Supplies
     ("A4 Copier Paper (500 sheets)", "4802", "ream", (150, 350)),
     ("Ballpoint Pens (box of 50)", "9608", "box", (200, 400)),
-    ("Laptop Bag", "4202", "unit", (800, 2000)),
-    ("USB-C Cable 1m", "8544", "unit", (100, 300)),
-    ("Office Chair", "9401", "unit", (3000, 9000)),
-    ("LED Desk Lamp", "9405", "unit", (500, 1500)),
     ("Printer Toner Cartridge", "8443", "unit", (1500, 4500)),
     ("Whiteboard Marker (pack of 10)", "9608", "pack", (150, 300)),
-    ("Steel Filing Cabinet", "9403", "unit", (4000, 12000)),
+    # 5020 IT Equipment
+    ("Laptop Bag", "4202", "unit", (800, 2000)),
+    ("USB-C Cable 1m", "8544", "unit", (100, 300)),
     ("Wireless Mouse", "8471", "unit", (400, 1200)),
+    ("Laptop Docking Station", "8471", "unit", (3500, 9000)),
+    # 5030 Furniture & Fixtures
+    ("Office Chair", "9401", "unit", (3000, 9000)),
+    ("LED Desk Lamp", "9405", "unit", (500, 1500)),
+    ("Steel Filing Cabinet", "9403", "unit", (4000, 12000)),
+    ("Air Conditioner Unit 1.5T", "8415", "unit", (28000, 52000)),
+    # 5040 Professional Services
+    ("Software Subscription (annual)", "9983", "licence", (4000, 36000)),
+    ("Legal Retainer (monthly)", "9982", "month", (15000, 60000)),
+    ("Statutory Audit Fee", "9982", "engagement", (25000, 90000)),
+    # 5050 Facilities & Utilities
+    ("Annual Maintenance Contract - HVAC", "9987", "year", (18000, 65000)),
+    ("Contract Labour - Housekeeping", "9985", "month", (8000, 30000)),
+    ("Electricity Charges", "9969", "month", (6000, 42000)),
+    # 5060 Travel & Transport
+    ("Courier Charges (per consignment)", "9968", "consignment", (120, 900)),
+    ("Freight Forwarding Service", "9965", "shipment", (2500, 18000)),
+    ("Diesel Fuel", "2710", "litre", (90, 110)),
 ]
 GST_RATES = [5.0, 12.0, 18.0, 28.0]
 
@@ -105,11 +154,70 @@ def gen_gstin(rng: random.Random, state_code: str) -> str:
 #: invoice. Parties are therefore minted once and reused.
 _PARTY_REGISTRY: dict[str, tuple[dict, str, dict]] = {}
 
+#: Every address a company bills from, and the trading name it sometimes uses.
+#:
+#: Three Phase 4 limitations came from this being absent:
+#:
+#: - `address_mismatch` never fired. One address per supplier meant every
+#:   invoice matched the record at 100% similarity, so the check never executed
+#:   and its 75% threshold was never validated.
+#: - No vendor aliasing. A real supplier master carries trading names; matching
+#:   on the legal name alone made resolution easier than it is.
+#: - No legitimate bank-detail changes. Every account change in the corpus was
+#:   fraud, so `bank_account_changed` had no honest counter-example and its
+#:   precision was measured against a population containing none.
+#:
+#: NOTE the branch addresses are per *company*, not per invoice. Re-rolling an
+#: address per invoice would make `address_mismatch` fire on everything, which
+#: is the same defect as the vendor identity bug recorded in
+#: docs/limitations.md -- a check that fires always carries no information.
+_SITES: dict[str, list[str]] = {}
+_TRADING_NAMES: dict[str, str] = {}
+
+#: Companies that legitimately change bank account partway through their
+#: history, with no fraud involved. `bank_account_changed` SHOULD flag these
+#: for review -- that is correct behaviour -- but they must exist so the
+#: false-positive rate is measured against a population that contains them.
+_BANK_CHANGES: dict[str, dict] = {}
+
+
+def reset_site_registry() -> None:
+    _SITES.clear()
+    _TRADING_NAMES.clear()
+    _BANK_CHANGES.clear()
+
+
+def _street(rng: random.Random, city: str, state: str) -> str:
+    road = rng.choice(
+        ["MG Road", "Anna Salai", "Park Street", "Ring Road", "Station Road", "Industrial Estate"]
+    )
+    return f"{rng.randint(1, 200)} {road}, {city}, {state} {rng.randint(100000, 699999)}"
+
+
+def _trading_name(rng: random.Random, legal: str) -> str | None:
+    """A shortened or abbreviated form the company also bills under.
+
+    Not a corruption -- those are injected at evaluation time to simulate OCR.
+    This is a second *legitimate* name, which resolution has to handle without
+    treating it as a different supplier.
+    """
+    words = legal.split()
+    if len(words) < 2 or rng.random() > 0.35:
+        return None
+    return rng.choice(
+        [
+            f"{words[0]} {words[-1][:3]}.",
+            words[0],
+            f"{''.join(w[0] for w in words)} {words[-1]}",
+        ]
+    )
+
 
 def reset_party_registry() -> None:
     """Clear the registry. Called per generation run so a fixed seed keeps
     producing a fixed corpus rather than depending on process state."""
     _PARTY_REGISTRY.clear()
+    reset_site_registry()
 
 
 def gen_bank_details(rng: random.Random, name: str) -> dict:
@@ -189,22 +297,66 @@ def gen_party(rng: random.Random) -> tuple[dict, str]:
         party, party_code, _ = _PARTY_REGISTRY[name]
         return dict(party), party_code
 
-    house_no = rng.randint(1, 200)
+    # Registered office first, then 0-2 branches. Minted once per company and
+    # reused, so an address is a property of the supplier rather than of the
+    # invoice -- see the note on _SITES.
+    registered = _street(rng, city, state)
+    sites = [registered]
+    for _ in range(rng.choice([0, 0, 1, 1, 2])):
+        branch_city, branch_state, _branch_code = rng.choice(CITIES)
+        sites.append(_street(rng, branch_city, branch_state))
+    _SITES[name] = sites
+
+    trading = _trading_name(rng, name)
+    if trading:
+        _TRADING_NAMES[name] = trading
+
     party = {
         "name": name,
-        "address": f"{house_no} {rng.choice(['MG Road', 'Anna Salai', 'Park Street', 'Ring Road', 'Station Road'])}, {city}, {state} {rng.randint(100000, 699999)}",
+        "address": registered,
         "gstin": gen_gstin(rng, STATE_CODES[code]),
         "phone": f"+91-{rng.randint(70000,99999)}{rng.randint(10000,99999)}",
         "email": f"billing@{name.lower().split()[0]}.example",
     }
     _PARTY_REGISTRY[name] = (party, code, gen_bank_details(rng, name))
+
+    # One supplier in roughly twelve genuinely changes bank account partway
+    # through its life. Recorded here so the switch is deterministic for a
+    # given seed rather than depending on invoice ordering.
+    if rng.random() < 0.08:
+        _BANK_CHANGES[name] = gen_bank_details(rng, name + "-new")
+
     return dict(party), code
 
 
-def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
+def gen_document(rng: random.Random, doc_id: str, split: str, index: int = 0) -> dict:
     vendor, vendor_state = gen_party(rng)
     buyer, buyer_state = gen_party(rng)
     interstate = vendor_state != buyer_state
+
+    legal_name = vendor["name"]
+
+    # Bill from one of the company's sites. Weighted towards the registered
+    # office, because that is what a supplier file would mostly contain and a
+    # uniform draw would make a branch address the common case.
+    sites = _SITES.get(legal_name) or [vendor["address"]]
+    vendor["address"] = sites[0] if rng.random() < 0.7 else rng.choice(sites)
+
+    # Some invoices arrive under the trading name. This is a legitimate second
+    # name, not an OCR corruption -- resolution has to join it to the same
+    # supplier rather than treat it as a new one.
+    trading = _TRADING_NAMES.get(legal_name)
+    if trading and rng.random() < 0.3:
+        vendor["name"] = trading
+
+    # A legitimate bank change takes effect from the midpoint of the corpus.
+    # `bank_account_changed` SHOULD flag these -- it is correct behaviour on
+    # evidence this thin -- but they have to exist for the false-positive rate
+    # to mean anything.
+    bank = dict(_PARTY_REGISTRY[legal_name][2])
+    changed = _BANK_CHANGES.get(legal_name)
+    if changed and index >= 75:
+        bank = dict(changed)
 
     n_items = rng.randint(1, 5)
     rate = rng.choice(GST_RATES)
@@ -303,7 +455,7 @@ def gen_document(rng: random.Random, doc_id: str, split: str) -> dict:
         # vendor's known one is exactly the fraud signal Phase 4 looks for,
         # and that signal only exists if the normal case is stable.
         "payment_info": {
-            **_PARTY_REGISTRY[vendor["name"]][2],
+            **bank,
             "upi_id": None,
             "mode": None,
             "terms": None,
@@ -346,7 +498,7 @@ def main() -> int:
                 split = name
                 break
         doc_id = f"gst_synth_{i:04d}"
-        doc = gen_document(rng, doc_id, split)
+        doc = gen_document(rng, doc_id, split, index=i)
         errors = validate_jsonschema(doc, schema)
         if errors:
             print(f"SKIP {doc_id}: {errors}", file=sys.stderr)
@@ -354,7 +506,38 @@ def main() -> int:
         (canonical_dir / f"{doc_id}.json").write_text(json.dumps(doc, indent=2))
         n_ok += 1
 
+    # The supplier file's own record of trading names. A real master carries
+    # these; without them a company billing under two names produces two
+    # records with half the history each, so identity checks see a thinner
+    # record than exists. VendorMaster.build(documents, aliases=...) reads it.
+    #
+    # Written as a sidecar rather than inferred, because inferring it means
+    # fuzzy-merging names -- which would also merge the genuinely distinct
+    # suppliers whose names are near-identical.
+    alias_map = {alias: legal for legal, alias in _TRADING_NAMES.items()}
+    aliases_path = args.out / "vendor_aliases.json"
+    aliases_path.write_text(
+        json.dumps(
+            {
+                "note": (
+                    "Trading name -> legal entity, as a supplier master would "
+                    "record them. Not ground truth about the invoices; it is "
+                    "reference data the vendor master is entitled to have."
+                ),
+                "aliases": alias_map,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    multi_site = sum(1 for sites in _SITES.values() if len(sites) > 1)
     print(f"Wrote {n_ok}/{args.count} synthetic GST invoices to {canonical_dir}")
+    print(
+        f"  {len(_SITES)} suppliers, {multi_site} with branch addresses, "
+        f"{len(alias_map)} trading names, {len(_BANK_CHANGES)} legitimate bank changes"
+    )
+    print(f"  wrote {aliases_path}")
     return 0 if n_ok == args.count else 1
 
 
