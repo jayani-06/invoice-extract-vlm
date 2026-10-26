@@ -123,6 +123,104 @@ def _is_standalone(line: str, match: re.Match) -> bool:
     return before_ok and (after == "" or after.isspace() or after in "%,)")
 
 
+#: Plain-text form of each label pattern, for similarity matching. Keyed by
+#: the pattern so the two can never drift apart: a pattern with no entry here
+#: simply gets no fuzzy pass.
+_LABEL_TEXT: dict[str, tuple[str, ...]] = {
+    r"invoice\s*(?:no|number|#)": ("invoice no", "invoice number"),
+    r"bill\s*(?:no|number)": ("bill no", "bill number"),
+    r"invoice\s*date": ("invoice date",),
+    r"due\s*date": ("due date",),
+    r"date\s*of\s*issue": ("date of issue",),
+    r"p\.?o\.?\s*(?:no|number)": ("po no", "po number"),
+    r"payment\s*terms": ("payment terms",),
+    r"\bterms\b": ("terms",),
+    r"\bdate\b": ("date",),
+}
+
+#: Glyphs an OCR engine confuses, folded to one representative before
+#: comparing. Both the observed label and the candidate go through this, so
+#: the mapping only has to be consistent, not correct about which glyph was
+#: "really" there.
+#:
+#: This is not optional polish -- plain similarity cannot do this job.
+#: Measured on real confusions: `lnvoice n0` scores 80 against `invoice no`
+#: while `invoice total` scores 72 against `invoice date`. Those ranges
+#: overlap, so no threshold separates a damaged label from a different one.
+#: After folding, genuine damage lands near 100 and the confusable pair is
+#: untouched at 72, because t and d are not confusable glyphs.
+_OCR_FOLD = str.maketrans(
+    {
+        "1": "i",
+        "l": "i",
+        "|": "i",
+        "!": "i",
+        "0": "o",
+        "5": "s",
+        "8": "b",
+        "6": "g",
+        "2": "z",
+    }
+)
+
+
+def _fold(text: str) -> str:
+    return text.translate(_OCR_FOLD)
+
+
+#: Similarity at or above which a damaged label is accepted, after folding.
+_LABEL_SIMILARITY = 88.0
+
+#: Where a label ends and its value begins.
+_SEPARATOR = re.compile(r"\s*[:\-]\s+|\s*:\s*|\s{2,}")
+
+
+def _split_label_and_value(line: str) -> tuple[str, str] | None:
+    """Everything before the first separator, and everything after."""
+    match = _SEPARATOR.search(line)
+    if not match:
+        return None
+    label = line[: match.start()].strip()
+    value = line[match.end() :].strip(" :-\t")
+    if not label or not value:
+        return None
+    return label, value
+
+
+def _fuzzy_label_match(line: str) -> tuple[str, str] | None:
+    """Best (field, value) for a line whose label is damaged, or None.
+
+    Only called after every exact pattern has already failed on this line, so
+    a correctly-matched line can never be re-routed here by a near miss.
+    """
+    from rapidfuzz import fuzz
+
+    split = _split_label_and_value(line)
+    if not split:
+        return None
+    label, value = split
+    # A label is short. Anything long is a sentence that happens to contain a
+    # colon, and comparing it would only generate false matches.
+    if len(label) > 32:
+        return None
+
+    normalised = re.sub(r"[^a-z0-9 ]+", " ", label.lower())
+    normalised = re.sub(r"\s+", " ", normalised).strip()
+    if not normalised:
+        return None
+
+    folded = _fold(normalised)
+    best_field, best_score = None, 0.0
+    for pattern, field_name in _META_LABELS:
+        for candidate in _LABEL_TEXT.get(pattern, ()):
+            score = fuzz.ratio(folded, _fold(candidate))
+            if score > best_score:
+                best_field, best_score = field_name, score
+    if best_field is None or best_score < _LABEL_SIMILARITY:
+        return None
+    return best_field, value
+
+
 def _value_after_label(line: str, label_pattern: str) -> str | None:
     """Text following a label on the same line.
 
@@ -279,20 +377,36 @@ class RuleBasedExtractor:
             "po_number": None,
             "payment_terms": None,
         }
+
+        def store(field_name: str, value: str) -> None:
+            if field_name.endswith("date"):
+                token = _DATE_TOKEN.search(value)
+                if token:
+                    meta[field_name] = token.group()
+            else:
+                meta[field_name] = value.split()[0] if field_name.endswith("number") else value
+
         for line in lines:
+            matched_exactly = False
             for pattern, field_name in _META_LABELS:
                 if meta.get(field_name) is not None:
                     continue
                 if not re.search(pattern, line, re.IGNORECASE):
                     continue
+                matched_exactly = True
                 value = _value_after_label(line, pattern)
-                if not value:
-                    continue
-                if field_name.endswith("date"):
-                    date_token = _DATE_TOKEN.search(value)
-                    meta[field_name] = date_token.group() if date_token else None
-                else:
-                    meta[field_name] = value.split()[0] if field_name.endswith("number") else value
+                if value:
+                    store(field_name, value)
+
+            # Only lines no exact pattern claimed. OCR turns `Invoice No:` into
+            # `lnvoice N0:` and the field is then lost entirely rather than
+            # misread -- which is most of why this extractor falls from 1.000
+            # on the renderer's own text to 0.653 through a real engine.
+            if matched_exactly:
+                continue
+            fuzzy = _fuzzy_label_match(line)
+            if fuzzy and meta.get(fuzzy[0]) is None:
+                store(*fuzzy)
         return meta
 
     def _totals(self, lines: list[str]) -> dict[str, Any]:
