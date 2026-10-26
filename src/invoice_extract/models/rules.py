@@ -46,6 +46,19 @@ _META_LABELS: list[tuple[str, str]] = [
     (r"p\.?o\.?\s*(?:no|number)", "po_number"),
     (r"payment\s*terms", "payment_terms"),
     (r"\bterms\b", "payment_terms"),
+    # A bare "DATE:" label, which is what a retail receipt prints. Placed last
+    # so every specific label above wins first -- "DUE DATE" must not be read
+    # as the invoice date.
+    #
+    # Added after inspecting the SROIE **train** split, and that is the whole
+    # story of this rule: the label vocabulary above was written from Indian
+    # GST invoices, which say "Invoice Date". Real receipts say "DATE". The
+    # date was sitting in plain text in a format `_DATE_TOKEN` parses, next to
+    # a label, and the extractor returned null on **157 of 157** test receipts
+    # because that one label was missing. One absent anchor costs an entire
+    # field, which is the sharpest illustration in this project of how a
+    # label-anchored baseline fails on documents it was not written for.
+    (r"\bdate\b", "invoice_date"),
 ]
 
 _TOTAL_LABELS: list[tuple[str, str]] = [

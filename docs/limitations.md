@@ -20,13 +20,75 @@ Read this alongside the results, not after them.
 | `fatura2` | Third party (Limam et al., CC-BY-4.0), 50 layout templates | Third-party, but still **template-generated** |
 
 FATURA2 matters because it was designed by other people — it is what exposed
-the extraction baseline scoring 1.000 on our invoices and 0.559 on theirs. But
-it is not photographs. Nothing in this project has met a real scan: no stamps,
-handwriting, staples, folds, coffee rings, phone-camera perspective, non-Latin
-script, or the specific ways real print degrades.
+the extraction baseline scoring 1.000 on our invoices and 0.700 on theirs.
 
-**SROIE** (real photographed receipts) and **CORD** remain unconverted. They
-are the single highest-value acquisition left.
+**SROIE is now converted: 652 photographs of real Malaysian retail receipts**
+(MIT-licensed mirror), carrying real line-item annotations, which FATURA2 lacks
+entirely. So the sentence above is no longer true of the whole project — but it
+is still true of most of it.
+
+| Corpus | Source | Real? |
+|---|---|---|
+| `gst_in_synthetic` | Our own generator and renderer | No |
+| `fatura2` | Third party (Limam et al., CC-BY-4.0), 50 layout templates | Third-party, still template-generated |
+| `sroie` | ICDAR 2019, 652 photographed retail receipts | **Yes** |
+
+What SROIE is **not** yet used for: Phase 1 (its annotations are line-level, so
+box-IoU detection figures from it are not comparable with our word-level ones),
+Phase 3, Phase 4 (no vendor history, no bank details, no GSTIN) and the VLM
+run. Only the Phase 2 extraction baseline has met it.
+
+**CORD remains unconverted.**
+
+### What SROIE changed
+
+| Corpus | Header accuracy | n |
+|---|---|---|
+| ours (our own renderer) | **1.000** | 50 |
+| FATURA2 (third-party templates) | **0.700** | 50 |
+| **SROIE (real photographs)** | **0.777** | 157 (test split) |
+
+**Real photographed receipts score higher than FATURA2's synthetic templates.**
+That is the opposite of the expected ordering, and it is not a measurement
+artefact: all three are perfect-OCR ceiling numbers taken from gold text, so
+image quality is not in play at all. What hurts a label-anchored baseline is
+*layout diversity*, not degradation — FATURA2 deliberately varies 50 layouts
+and sets the vendor name beside a logo, while receipts are structurally
+monotonous (vendor at the top, `TOTAL` labelled). The difficulty of real
+documents lives in the OCR stage, which these figures exclude by construction.
+
+Two caveats specific to the SROIE figure:
+
+- **Its macro field accuracy is inflated by null-vs-null.** SROIE annotates
+  four field types; `gstin`, `phone`, `tax_id`, `due_date` and `po_number` are
+  absent from its gold, and predicting nothing for them scores as correct.
+  Header accuracy is the honest column.
+- **Line-item F1 is 0.301**, and part of that was the converter rather than the
+  extractor: receipts print the amount on the line *below* the description, so
+  pairing by same-row overlap found only 37% of amounts until the rule was
+  corrected to claim downward. It is 80% now.
+
+### One missing label cost an entire field
+
+The extractor returned null for `invoice_date` on **157 of 157** receipts. The
+date was in plain text, in a format `_DATE_TOKEN` parses, directly beside a
+label — but `_META_LABELS` knew only "invoice date" and "date of issue",
+because it was written from Indian GST invoices. Receipts say "DATE".
+
+A bare `date` anchor was added, ordered last so specific labels still win.
+**It was fitted by inspecting the SROIE train split**, which is tuning and is
+therefore declared:
+
+| | header | critical-fields | macro |
+|---|---|---|---|
+| train, before | 0.687 | 0.005 | 0.701 |
+| train, after | 0.771 | 0.176 | 0.725 |
+| test, before | 0.684 | 0.019 | 0.699 |
+| **test, after** | **0.777** | **0.217** | **0.726** |
+
+Train and test move together, and FATURA2 independently improved 0.610 → 0.700
+on the same one-line change while `gst_in_synthetic` stayed at 1.000. That
+cross-corpus transfer is what separates a real fix from test-set tuning.
 
 ---
 
@@ -257,6 +319,7 @@ limitation. What remains a limitation is everything around it:
 | Phase 3 | 100 ledger / 50 evaluation |
 | Phase 4 | 100 history / 50 evaluation |
 | VLM run | 100 documents (50 ours, 50 FATURA2) |
+| SROIE extraction | 157 documents (test split of 652) |
 
 **A note on which numbers are current.** Several figures above were measured
 before the corpus was made harder (6 accounts instead of 3, 21 item
@@ -295,8 +358,11 @@ that consumes it.** Phases 5 and 6 may yet surface a fourth.
 
 In order:
 
-1. **Convert SROIE.** Real photographed receipts would be the first time any
-   stage here meets a real scan. Now the largest single gap.
+1. **Put SROIE through the stages that have not seen it.** It is converted
+   (652 real receipts) but only the Phase 2 extraction baseline has run on it.
+   The VLM has never seen a real photograph, and neither has Phase 1 — its
+   line-level annotations make detection F1 incomparable, but CER and WER are
+   perfectly valid there and unmeasured.
 2. **Re-run the rules baseline with `--ocr-source engine`.** Until then the
    headline comparison puts a perfect-OCR ceiling beside a genuine end-to-end
    figure, which flatters the baseline.
