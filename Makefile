@@ -153,3 +153,17 @@ phase3: phase3-ledger phase3-eval
 # invoices against it, with injected vendor fraud.
 phase4:
 	python scripts/run_validation_eval.py --corpus $(CORPUS) --out reports/phase4_validation
+
+# ------------------------------------------------------------------ phase 5
+
+.PHONY: service-install serve service-test
+
+service-install:
+	uv pip install --system -e ".[ocr,paddle,service]"
+
+# Review UI at http://localhost:8000/review, API docs at /docs.
+serve:
+	python scripts/run_service.py
+
+service-test:
+	python -m pytest tests/test_service.py -q

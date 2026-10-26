@@ -16,6 +16,9 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+# Phase 5 service state: uploaded invoice images and the reviewer-decision
+# database. Real invoices may land here, so it is never committed.
+data/service/
 *.zip
 *.tar.gz
 
