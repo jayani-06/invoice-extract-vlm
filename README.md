@@ -29,6 +29,22 @@ This repo is deliberately sequenced so nothing downstream gets built on sand:
    clean original and pixel-exact word boxes. That pairing is what makes the
    preprocessing ablation measurable.
 
+## Try it in two commands
+
+```bash
+# the five-screen walkthrough: cleanup, OCR, extraction, RAG enrichment, results
+streamlit run demo/app.py
+
+# one invoice, end to end, to a PASS / REVIEW / FAIL verdict
+python scripts/process_invoice.py \
+    --image data/processed/gst_in_synthetic/images/medium/gst_synth_0105.png \
+    --ledger data/processed/ledger \
+    --history data/processed/gst_in_synthetic
+```
+
+`docs/RESULTS.md` has every measured number with its sample size and whether it
+is a perfect-OCR ceiling or a genuine end-to-end figure.
+
 ## Quickstart
 
 > **Windows:** `make` is not installed with Windows. Use `.\run.ps1 <task>`

@@ -58,8 +58,10 @@ demo = [
     "streamlit>=1.35",
 ]
 datasets = [
-    # scripts/convert_fatura2.py reads the Hugging Face parquet mirror.
+    # scripts/convert_fatura2.py and scripts/convert_sroie_hf.py both read
+    # Hugging Face parquet mirrors.
     "pyarrow>=16.0",
+    "huggingface-hub>=0.23",
 ]
 paddle = [
     "paddleocr>=2.7",
