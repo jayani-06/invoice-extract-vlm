@@ -26,6 +26,7 @@ Run with `python scripts/run_service.py` (or `.\\run.ps1 serve`).
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import uuid
@@ -33,10 +34,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from invoice_extract.rag.taxonomy import CHART_OF_ACCOUNTS
+from invoice_extract.service.auth import (  # noqa: E402
+    TOKEN_ENV,
+    Authenticator,
+    Principal,
+    Scope,
+    authorization_header,
+    describe,
+)
 from invoice_extract.service.knowledge import Knowledge
 from invoice_extract.service.pipeline import SchemaViolationError
 from invoice_extract.service.review import ReviewError, ReviewService
@@ -116,13 +125,72 @@ def default_service() -> ReviewService:
     )
 
 
-def create_app(service: ReviewService | None = None) -> FastAPI:
+log = logging.getLogger(__name__)
+
+
+def _reviewer(who: Principal, claimed: str | None) -> str:
+    """The name that goes in the audit trail.
+
+    The credential decides, never the request body. A body that disagrees is
+    rejected rather than ignored, so a client still sending its own name fails
+    loudly instead of quietly writing a different one into the log than the
+    one that was authenticated.
+
+    With authentication disabled the caller is `anonymous` and the body's name
+    is used, which is exactly the previous behaviour.
+    """
+    if who.anonymous:
+        return claimed or "anonymous"
+    if claimed and claimed != who.name:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"authenticated as {who.name!r}; cannot record a decision as {claimed!r}",
+        )
+    return who.name
+
+
+def create_app(service: ReviewService | None = None, auth: Authenticator | None = None) -> FastAPI:
     app = FastAPI(
         title="invoice-extract-vlm",
         version="0.5.0",
         description="Phase 5: the extraction pipeline as a service, with a human-review path.",
     )
+    authenticator = auth if auth is not None else Authenticator.from_env()
+    if not authenticator.enabled:
+        # Loud, because a security control that is silently absent is worse
+        # than one that is absent. /health says the same thing.
+        log.warning(
+            "No %s configured: every caller is 'anonymous' with every scope. "
+            "Set it before exposing this beyond localhost.",
+            TOKEN_ENV,
+        )
+    app.state.authenticator = authenticator
     state: dict[str, Any] = {"service": service, "jobs": None}
+
+    def principal_with(scope: Scope):
+        """Dependency factory: resolve the caller and check one scope."""
+
+        def dependency(
+            authorization: str | None = Depends(authorization_header),
+        ) -> Principal:
+            who = authenticator.principal_for(authorization)
+            authenticator.require(who, scope)
+            return who
+
+        return dependency
+
+    # `Depends` in the DEFAULT, not inside `Annotated`. This module has
+    # `from __future__ import annotations`, so every annotation is a string
+    # resolved against module globals -- a type alias declared here, inside
+    # the factory, is invisible to that lookup and FastAPI silently falls
+    # back to treating the parameter as a query field. The symptom is a 422
+    # demanding `who` as a query parameter.
+    #
+    # ruff's B008 (no function calls in argument defaults) is a false
+    # positive for FastAPI: `Depends` is inert until the framework resolves
+    # it, and this is the documented idiom.
+    may_submit = Depends(principal_with(Scope.SUBMIT))  # noqa: B008
+    may_review = Depends(principal_with(Scope.REVIEW))  # noqa: B008
 
     def svc() -> ReviewService:
         if state["service"] is None:
@@ -161,10 +229,14 @@ def create_app(service: ReviewService | None = None) -> FastAPI:
             "ledger_entries": len(service.knowledge.entries),
             "vendors": len(service.knowledge.master),
             "open_review_items": len(service.store.items(state="open")),
+            **describe(authenticator),
         }
 
     @app.post("/documents", response_model=ProcessResult, response_model_exclude_unset=True)
-    def process_document(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
+    def process_document(
+        file: Annotated[UploadFile, File()],
+        who: Principal = may_submit,
+    ) -> dict[str, Any]:
         # A plain `def`, so FastAPI runs it in a worker thread: a 40 s OCR call
         # inside an `async def` would stall every other request, health
         # checks and job polling included.
@@ -172,7 +244,10 @@ def create_app(service: ReviewService | None = None) -> FastAPI:
         return svc().process_image(data, file.filename)
 
     @app.post("/jobs", response_model=JobHandle, status_code=status.HTTP_202_ACCEPTED)
-    def submit_job(file: Annotated[UploadFile, File()]) -> dict[str, Any]:
+    def submit_job(
+        file: Annotated[UploadFile, File()],
+        who: Principal = may_submit,
+    ) -> dict[str, Any]:
         data = file.file.read()
         job_id = jobs().submit(data, file.filename)
         return {"job_id": job_id, "status": "queued", "status_url": f"/jobs/{job_id}"}
@@ -206,10 +281,14 @@ def create_app(service: ReviewService | None = None) -> FastAPI:
     @app.post(
         "/review/lines/{item_id}", response_model=DocumentRecord, response_model_exclude_unset=True
     )
-    def decide_line(item_id: int, body: LineDecisionRequest) -> dict[str, Any]:
+    def decide_line(
+        item_id: int,
+        body: LineDecisionRequest,
+        who: Principal = may_review,
+    ) -> dict[str, Any]:
         return svc().decide_line(
             item_id,
-            reviewer=body.reviewer,
+            reviewer=_reviewer(who, body.reviewer),
             action=body.action,
             category=body.category,
             note=body.note,
@@ -220,10 +299,21 @@ def create_app(service: ReviewService | None = None) -> FastAPI:
         response_model=DocumentRecord,
         response_model_exclude_unset=True,
     )
-    def decide_document(doc_id: str, body: DocumentDecisionRequest) -> dict[str, Any]:
+    def decide_document(
+        doc_id: str,
+        body: DocumentDecisionRequest,
+        who: Principal = may_review,
+    ) -> dict[str, Any]:
+        # Clearing a FAIL is a separate right from reviewing. If the account
+        # that uploaded an invoice can also clear its own block, the queue is
+        # decoration -- so OVERRIDE is checked here rather than at the door,
+        # where the verdict is known.
+        record = svc().document_record(doc_id)
+        if record.get("verdict") == "FAIL" and body.action == "accept":
+            authenticator.require(who, Scope.OVERRIDE)
         return svc().decide_document(
             doc_id,
-            reviewer=body.reviewer,
+            reviewer=_reviewer(who, body.reviewer),
             action=body.action,
             reason=body.reason,
             vendor_name=body.vendor_name,

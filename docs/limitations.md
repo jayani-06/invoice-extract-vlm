@@ -350,13 +350,25 @@ limitation. What remains a limitation is everything around it:
 
 ## Phase 5 — service and human review
 
-- **No authentication or authorisation — out of scope by decision.** The
-  service accepts a reviewer name as a plain string. An override of a FAIL is
-  *recorded* against a name, not *verified* against an identity, so anyone who
-  can reach the port can make a blocked invoice payable under any name. It binds
-  to 127.0.0.1 by default. Putting it in front of real users needs an identity
-  provider, role separation (whoever uploads must not be able to override), and
-  audit retention; none of that is built.
+- **Token authentication with separated duties; not an identity provider.**
+  The reviewer's name now comes from the credential, never from the request
+  body — a body that disagrees is rejected rather than silently preferred, so
+  a stale client fails loudly instead of writing a wrong name into the audit
+  log. `SUBMIT` and `OVERRIDE` are distinct scopes, so the account that uploads
+  an invoice cannot clear its own FAIL; without that separation the review
+  queue is decoration.
+
+  **What it is not.** Tokens are shared secrets compared in constant time and
+  read from the environment. There is no password hashing, rotation, expiry,
+  transport security or identity provider, so this authenticates a *caller*,
+  not a *person*, and two people sharing a token are indistinguishable. Audit
+  retention is still unbuilt. It is honest access control for a prototype on a
+  trusted network and it is not a substitute for SSO.
+
+  With no tokens configured the service runs exactly as before, every caller
+  being `anonymous` with every scope — but it warns on startup and `/health`
+  reports `auth: "disabled"`, because a control that is silently absent is
+  worse than one that is absent.
 - **The synchronous endpoint is not under 10 s with real OCR.** OCR is ~40 s a
   page on CPU. The exit criterion is met only by the job endpoint returning a
   handle immediately.
