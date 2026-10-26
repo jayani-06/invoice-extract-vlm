@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 CACHE = ROOT / "demo_cache"
 
+from invoice_extract.rag.taxonomy import account_name  # noqa: E402
+
 st.set_page_config(page_title="Invoice Extraction Demo", layout="wide")
 
 # Plain white background, black text -- readable on a projector, and nothing
@@ -116,6 +118,62 @@ def not_run(message: str) -> None:
     st.info(f"Not run: {message}")
 
 
+@st.cache_resource(show_spinner=False)
+def load_knowledge():
+    """The ledger, the retriever and the vendor master.
+
+    Computed live rather than cached to disk like the OCR, because this half of
+    the pipeline is fast: indexing ~300 ledger entries with TF-IDF character
+    n-grams is milliseconds. OCR is the only stage expensive enough to need
+    precomputing, and the "never render a number that was not computed" rule is
+    satisfied either way -- these ARE computed, on the spot.
+
+    Returns None when the ledger has not been built, so the screen can say so
+    instead of rendering an empty table that looks like a result.
+    """
+    ledger_path = ROOT / "data/processed/ledger/ledger.json"
+    corpus = ROOT / "data/processed/gst_in_synthetic"
+    if not ledger_path.exists() or not (corpus / "canonical").exists():
+        return None
+
+    import glob
+
+    from invoice_extract.rag.store import LedgerEntry, TfidfRetriever, VendorStats
+    from invoice_extract.rag.vendor_master import VendorMaster
+
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    entries = [LedgerEntry(**e) for e in ledger["entries"]]
+    retriever = TfidfRetriever()
+    retriever.index(entries)
+
+    stats = VendorStats.build(entries, doc_totals={})
+    for row in ledger.get("doc_totals") or []:
+        if row.get("vendor") and row.get("grand_total") is not None:
+            stats.totals.setdefault(row["vendor"], []).append(row["grand_total"])
+
+    history = [
+        json.loads(Path(f).read_text(encoding="utf-8"))
+        for f in sorted(glob.glob(str(corpus / "canonical" / "*.json")))[:100]
+    ]
+    aliases = {}
+    alias_path = corpus / "vendor_aliases.json"
+    if alias_path.exists():
+        aliases = json.loads(alias_path.read_text(encoding="utf-8")).get("aliases") or {}
+
+    return {
+        "retriever": retriever,
+        "stats": stats,
+        "master": VendorMaster.build(history, aliases=aliases),
+        "history": history,
+        "n_entries": len(entries),
+        "n_aliases": len(aliases),
+    }
+
+
+SEVERITY_COLOUR = {"high": "bad", "medium": "bad", "low": "muted"}
+VERDICT_COLOUR = {"PASS": "ok", "REVIEW": "muted", "FAIL": "bad"}
+
+
 STAMP = _stamp()
 index = load_index(STAMP)
 if index is None:
@@ -140,8 +198,9 @@ screen = st.sidebar.radio(
         "1. Pipeline",
         "2. Read (OCR)",
         "3. Extract",
-        "4. Does it generalise?",
-        "5. Findings",
+        "4. Enrich (RAG)",
+        "5. Does it generalise?",
+        "6. Findings",
     ],
     label_visibility="collapsed",
 )
@@ -300,7 +359,156 @@ elif screen.startswith("3"):
 # --------------------------------------------------------------- 4. the gap
 
 elif screen.startswith("4"):
-    st.title("4. Does it generalise?")
+    st.title("4. Turning data into decisions")
+    st.write(
+        "Extraction stops at *what the page says*. This is the half that decides "
+        "**what to do about it** — which account each line belongs to, whether "
+        "anything looks wrong, and whether the supplier is who they claim to be."
+    )
+
+    knowledge = load_knowledge()
+    if knowledge is None:
+        not_run(
+            "the ledger has not been built. Run `python scripts/build_ledger.py` "
+            "to enable categorisation, anomaly detection and vendor validation."
+        )
+    else:
+        from invoice_extract.rag.anomaly import detect_anomalies
+        from invoice_extract.rag.categorize import categorize_document
+        from invoice_extract.rag.validate_vendor import validate_against_master
+
+        doc = pick_document(OURS, "rag_doc")
+        extraction = doc["extractions"].get("rules") or next(iter(doc["extractions"].values()))
+        document = extraction["document"]
+
+        st.caption(
+            f"Retrieving against {knowledge['n_entries']} past line items from "
+            f"{len(knowledge['history'])} accepted invoices. "
+            f"Vendor master: {len(knowledge['master'])} suppliers, "
+            f"{knowledge['n_aliases']} known trading names."
+        )
+
+        # ------------------------------------------------ retrieve + categorise
+        st.markdown("## Retrieval — what similar invoices were booked to")
+        st.write(
+            "For each line, the most similar items in the ledger are pulled up and "
+            "vote on the account, weighted by similarity. **This is the R in RAG**: "
+            "the answer comes from retrieved history, not from a model's prior."
+        )
+
+        decisions = categorize_document(
+            document, knowledge["retriever"], vendor_stats=knowledge["stats"]
+        )
+        items = document.get("line_items") or []
+        if not decisions:
+            not_run("this document has no line items to categorise")
+        for item, decision in zip(items, decisions, strict=False):
+            label = item.get("description") or "(no description)"
+            if decision.abstained:
+                head = f'**{label}** → <span class="muted">abstained</span>'
+            else:
+                head = (
+                    f'**{label}** → <span class="ok">{decision.category} '
+                    f"{account_name(decision.category)}</span> "
+                    f'<span class="muted">({decision.confidence:.0%} confident)</span>'
+                )
+            st.markdown(head, unsafe_allow_html=True)
+            st.caption(decision.reason)
+            if decision.neighbours:
+                rows = [
+                    "| Similar past item | Vendor | Booked to | Similarity |",
+                    "|---|---|---|---|",
+                ]
+                for m in decision.neighbours[:4]:
+                    rows.append(
+                        f"| {m.entry.description} | {m.entry.vendor or '—'} | "
+                        f"{m.entry.category} {account_name(m.entry.category)} | "
+                        f"{m.score:.2f} |"
+                    )
+                st.markdown(chr(10).join(rows), unsafe_allow_html=True)
+            st.markdown("")
+
+        st.info(
+            "When the neighbours are weak or disagree it **abstains** rather than "
+            "guessing. A wrong account code propagates silently into a ledger; an "
+            "abstention lands in a review queue and is cleared in seconds."
+        )
+
+        # ------------------------------------------------------------ anomalies
+        st.markdown("---")
+        st.markdown("## Anomaly flags")
+        report = detect_anomalies(document, knowledge["retriever"], knowledge["stats"])
+        if report.flags:
+            for flag in report.flags:
+                css = SEVERITY_COLOUR.get(flag.severity, "muted")
+                st.markdown(
+                    f'<span class="{css}">{flag.severity.upper()}</span> '
+                    f"<code>{flag.code}</code> — {flag.message}",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown('<span class="ok">Nothing flagged</span>', unsafe_allow_html=True)
+
+        st.caption(
+            "Recall is 1.000 on the scenarios these checks were designed for and "
+            "0.800 once two deliberately held-out scenarios are included — both of "
+            "which are missed entirely, and kept unfixed on purpose."
+        )
+
+        # ------------------------------------------------------- vendor validation
+        st.markdown("---")
+        st.markdown("## Is the supplier who they say they are?")
+        validation = validate_against_master(
+            document, knowledge["master"], history=knowledge["history"]
+        )
+        res = validation.resolution
+        if res.resolved:
+            st.markdown(
+                f"Resolved to **{res.vendor.name}** "
+                f'<span class="muted">(by {res.method}, '
+                f"{res.vendor.invoice_count} past invoices)</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<span class="muted">No matching supplier on file — treated as a '
+                "first-time vendor, which is a review, not a fraud finding.</span>",
+                unsafe_allow_html=True,
+            )
+
+        for check in validation.checks:
+            css = VERDICT_COLOUR.get(check.verdict, "muted")
+            st.markdown(
+                f'<span class="{css}">{check.verdict}</span> '
+                f"<code>{check.code}</code> — {check.message}",
+                unsafe_allow_html=True,
+            )
+
+        css = VERDICT_COLOUR.get(validation.verdict, "muted")
+        st.markdown(
+            f'### Verdict: <span class="{css}">{validation.verdict}</span>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "The worst check wins. PASS pays, REVIEW queues for a human, FAIL stops. "
+            "Nothing is ever silently corrected."
+        )
+
+        with st.expander("What is NOT shown here"):
+            st.markdown("""
+- **The generation step.** `rag/generate.py` prompts a local Qwen2.5-0.5B with
+  these same retrieved neighbours, and `rag/embed.py` adds dense retrieval.
+  Both are implemented and verified against real weights, but their Phase 3
+  numbers are still being measured, so this screen shows the
+  **similarity-weighted vote** — the control the generator has to beat.
+- **Fraud.** These are clean invoices. The injected-fraud scenarios live in
+  `scripts/run_validation_eval.py`; on the hardened corpus the system scores
+  precision 0.750 with a 0.308 false-positive rate, down from a flattering
+  1.000/0.000 on a corpus that had no hard cases.
+            """)
+
+elif screen.startswith("5"):
+    st.title("5. Does it generalise?")
     st.write(
         "The same extractor, on an invoice we designed and on one from a public "
         "dataset we did not."
@@ -391,7 +599,7 @@ elif screen.startswith("4"):
 # -------------------------------------------------------------- 5. findings
 
 else:
-    st.title("5. What we measured")
+    st.title("6. What we measured")
 
     st.markdown("## Preprocessing did not improve character accuracy")
     phase1 = load_report("phase1", STAMP)
