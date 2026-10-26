@@ -30,7 +30,7 @@ is still true of most of it.
 | Corpus | Source | Real? |
 |---|---|---|
 | `gst_in_synthetic` | Our own generator and renderer | No |
-| `fatura2` | Third party (Limam et al., CC-BY-4.0), 50 layout templates | Third-party, still template-generated |
+| `fatura2` | Third party (Limam et al., CC-BY-4.0), 50 layout templates | Third-party, **but entirely synthetic** |
 | `sroie` | ICDAR 2019, 652 photographed retail receipts | **Yes** |
 
 What SROIE is **not** yet used for: Phase 1 (its annotations are line-level, so
@@ -201,6 +201,19 @@ limitation. What remains a limitation is everything around it:
   placeholder covering the whole region, so every converted document carries
   `line_items: []`. The line-item exit criterion is verified **only on our own
   corpus**, where it is least meaningful.
+- **FATURA2's content is Faker-generated nonsense, not just its layouts.**
+  Inspected directly: item descriptions read "Prove amount sell." and "Assume
+  against."; emails are `@example.com`; one document is dated `03-Jan-1994`
+  with a due date of `06-Feb-2007`, thirteen years later; amounts are printed
+  in `$` while the total is labelled `EUR`. The pages are pixel-perfect vector
+  renders with no scan artefacts whatsoever.
+
+  This matters for how its numbers are read. The **layouts** are genuinely
+  third-party and that is what makes FATURA2 worth having — it is the only
+  thing measuring whether a label-anchored baseline transfers to a design
+  nobody here chose. But a share of the extraction failures on it are failures
+  to extract meaning that is not there, and the corpus cannot distinguish the
+  two. Treat FATURA2 as a **layout** benchmark, never as a document benchmark.
 - **The FATURA2 tag vocabulary was inferred, not supplied.** The parquet ships
   bare integer `ner_tags` with no label names. The mapping was derived by
   auditing all 1,400 test documents; `--audit-tags` re-verifies it and fails if

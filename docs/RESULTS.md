@@ -99,11 +99,22 @@ All `rules` figures are a **perfect-OCR ceiling** (`--ocr-source gold`, the
 renderer's own text). The VLM figures are **genuine end-to-end** — it read
 pixels with no OCR anywhere. The asymmetry favours the baseline.
 
-| Corpus | What it is | `rules` ceiling | `rules` end-to-end | n |
+| Corpus | Real? | `rules` ceiling | `rules` end-to-end | n |
 |---|---|---|---|---|
-| `gst_in_synthetic` | our own renderer | **1.000** | **0.653** | 50 |
-| `fatura2` | third-party, 50 synthetic layouts | **0.700** | **0.645** | 50 |
-| `sroie` | **652 real photographed receipts** | **0.777** | not measured | 157 |
+| `gst_in_synthetic` | no — our own renderer | **1.000** | **0.653** | 50 |
+| `fatura2` | no — third-party templates, Faker content | **0.700** | **0.645** | 50 |
+| `sroie` | **yes — photographed receipts** | **0.777** | running | 157 |
+
+**Two of the three corpora are synthetic, and one of those is synthetic twice
+over.** FATURA2's layouts are genuinely designed by other people, which is the
+whole reason to have it, but its *content* is Faker output — item descriptions
+like "Prove amount sell.", `@example.com` emails, a 1994 invoice due in 2007,
+amounts in `$` with a total in `EUR`. Read it as a **layout** benchmark, never
+as a document benchmark.
+
+SROIE is the only real one: thermal-printed Malaysian receipts, photographed,
+with print fading mid-word, barcodes, creases, Chinese text, and in at least
+one case a total circled in blue pen.
 
 The two right-hand columns are the single most important thing on this page.
 A perfect-OCR ceiling costs the baseline **34.7 points** on our own corpus and
