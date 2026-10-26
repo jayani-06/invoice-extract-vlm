@@ -62,6 +62,13 @@ switch ($Task.ToLower()) {
         Invoke-Step @("scripts/build_demo_cache.py", "--vlm", $VlmOut)
     }
 
+    # ------------------------------------------------------------- phase 5
+    "serve" {
+        Write-Host "Review UI at http://localhost:8000/review, API docs at /docs (Ctrl+C to stop)" -ForegroundColor Cyan
+        Invoke-Step (@("scripts/run_service.py") + $Rest)
+    }
+    "service-test" { Invoke-Step (@("-m", "pytest", "tests/test_service.py", "-q") + $Rest) }
+
     # --------------------------------------------------------------- checks
     "test"   { Invoke-Step (@("-m", "pytest") + $Rest) }
     "lint"   { Invoke-Step @("-m", "ruff", "check", "."); Invoke-Step @("-m", "black", "--check", ".") }
@@ -137,6 +144,10 @@ switch ($Task.ToLower()) {
         Write-Host "    demo-cache-fast    same without OCR (~1 min)"
         Write-Host "    demo-vlm-payload   package images for a Colab GPU run"
         Write-Host "    demo-vlm-merge     fold Colab results back in"
+        Write-Host ""
+        Write-Host "  Service (Phase 5)" -ForegroundColor White
+        Write-Host "    serve              API + review UI on http://localhost:8000"
+        Write-Host "    service-test       the API contract and review-rule tests"
         Write-Host ""
         Write-Host "  Checks" -ForegroundColor White
         Write-Host "    test | lint | format | validate-schema | eval-smoke"

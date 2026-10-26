@@ -139,18 +139,25 @@ src/invoice_extract/
   eval/ocr_metrics.py       CER, WER, word-box detection P/R/F1
   eval/harness.py           CLI: score predictions.jsonl against gold.jsonl
   utils/quantization.py     4-bit NF4 loading helper for T4-class GPUs
+  service/pipeline.py       image -> verdict as one call (the end-to-end chain)
+  service/schemas.py        API models; the document is data/models.py, reused
+  service/review.py         routing, review-queue rules, feedback into the master
+  service/store.py          SQLite: results, queue, append-only decision log
+  service/api.py            FastAPI app (+ a minimal reviewer page at /review)
 scripts/                    download_*, convert_*, generate_synthetic_gst_invoices.py,
                             build_image_corpus.py, make_pipeline_figure.py,
                             run_preprocess_ablation.py, run_extraction.py,
                             run_extraction_ablation.py, convert_fatura2.py,
                             build_ledger.py, run_rag_eval.py,
-                            run_validation_eval.py, build_ledger.py
-tests/                      pytest suite (347 tests)
+                            run_validation_eval.py, build_ledger.py,
+                            run_service.py
+tests/                      pytest suite (455 tests)
 configs/compute_plan.md     Colab / Kaggle T4 inference plan, quantization decision
 docs/phase1_preprocessing.md  Phase 1 design, findings, how to run the ablation
 docs/phase2_extraction.md     Phase 2 design, results, honest limitations
 docs/phase3_rag.md            Phase 3 RAG enrichment, results, honest limitations
 docs/phase4_validation.md     Phase 4 vendor validation, results, honest limitations
+docs/phase5_service.md        Phase 5 service + review path, results, honest limitations
 docs/limitations.md           everything the project has NOT established, in one place
 demo/                       Streamlit demo app + its README
 notebooks/                  Colab notebooks (incl. vlm_demo_outputs.ipynb)
@@ -291,6 +298,20 @@ Identity is now a property of the company, prices are per-(vendor, item) with
 +-4% jitter, and invoice numbers are a per-vendor sequence rather than a random
 draw that produced ~4 genuine collisions.
 
+**Phase 5 (done; criterion 1 met only via the job endpoint)** - the pipeline as
+a FastAPI service with a human-review path. `POST /jobs` takes an invoice image
+and returns a handle at once; the result carries the extracted document (the
+canonical model, not a second schema), per-line categories with their retrieved
+neighbours, anomaly flags, and the vendor verdict with its explanation. REVIEW
+documents and abstained lines form a review queue; a FAIL cannot be accepted,
+only overridden with a reason recorded against a reviewer's name; accepted
+documents, with reviewer corrections, feed back into the vendor master and the
+ledger. Two findings: serving the canonical pydantic model made documents
+schema-invalid (nulls the JSON Schema rejects), and one reviewer correction is
+not enough to teach the categoriser - it took 3. **The synchronous endpoint is
+not under 10 s with real OCR** (OCR alone is ~40 s/page on CPU). No auth, by
+decision. See `docs/phase5_service.md`.
+
 **Known gaps are catalogued in `docs/limitations.md`** rather than scattered
 across the phase docs. Two anomaly scenarios are deliberately held out and
 currently **missed entirely** (0/4 and 0/3), which drops Phase 3 recall from
@@ -303,7 +324,7 @@ unfixed as a permanent probe.
   3B/7B presets and the hybrid image+OCR mode are implemented and unrun, so
   "a VLM cannot close this gap" is *not* established - only that this one
   does not.
-- **Phase 5 (API / service layer) not started.**
+- **The service has no authentication.** Reviewer names are recorded, not verified.
 - **No real *photographed* documents.** FATURA2 is third-party but still
   synthetic. SROIE (real photographed receipts) and CORD remain unconverted.
 - **FATURA2 has no line-item annotations** (its table is one placeholder

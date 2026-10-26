@@ -325,6 +325,33 @@ limitation. What remains a limitation is everything around it:
   on but the record is still thin — enough history to be checked, not enough to
   be right.
 
+## Phase 5 — service and human review
+
+- **No authentication or authorisation — out of scope by decision.** The
+  service accepts a reviewer name as a plain string. An override of a FAIL is
+  *recorded* against a name, not *verified* against an identity, so anyone who
+  can reach the port can make a blocked invoice payable under any name. It binds
+  to 127.0.0.1 by default. Putting it in front of real users needs an identity
+  provider, role separation (whoever uploads must not be able to override), and
+  audit retention; none of that is built.
+- **The synchronous endpoint is not under 10 s with real OCR.** OCR is ~40 s a
+  page on CPU. The exit criterion is met only by the job endpoint returning a
+  handle immediately.
+- **One correction does not teach the categoriser.** Measured: it took 3
+  reviewed corrections of the same novel item before a later invoice was
+  categorised without help, because Phase 3's vote lets several weak same-vendor
+  neighbours outvote one near-exact match. The fix belongs in Phase 3.
+- **With real OCR every page went to review** (6/6 on the timing run): OCR
+  misreads of unit prices surface as price deviations and arithmetic flags. The
+  auto-accept path is mostly exercised only with perfect text.
+- **Accretion trusts auto-accepted documents.** A fraud that passes Phase 4 is
+  added to the vendor master as normal history.
+- **No load testing, one OCR worker, in-memory job registry** (jobs are lost on
+  restart; the documents and decisions are not).
+- **Single-page documents only.**
+- **No reviewer study.** Whether the queue gives a person enough to decide well
+  is untested.
+
 ---
 
 ## Statistical weight

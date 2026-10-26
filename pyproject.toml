@@ -57,6 +57,18 @@ demo = [
     # demo, not to compute anything -- the cache builder runs without it.
     "streamlit>=1.35",
 ]
+service = [
+    # Phase 5: the HTTP service in src/invoice_extract/service/api.py.
+    # python-multipart parses image uploads; httpx is what FastAPI's
+    # TestClient drives, so tests/test_service.py needs it too. Persistence is
+    # stdlib sqlite3 and adds nothing here. The service runs the Phase 1
+    # preprocessing, so it also needs the `ocr` extra (and `paddle` for real
+    # OCR): pip install -e ".[ocr,paddle,service]".
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]
 datasets = [
     # scripts/convert_fatura2.py and scripts/convert_sroie_hf.py both read
     # Hugging Face parquet mirrors.
