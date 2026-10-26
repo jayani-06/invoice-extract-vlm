@@ -37,6 +37,32 @@ class ContractRate:
             return 0.0
         return (unit_price - self.median_unit_price) / self.median_unit_price
 
+    @property
+    def observed_spread(self) -> float:
+        """Half the observed range, relative to the median.
+
+        What this item's price actually does, as opposed to what a flat
+        percentage band assumes it does. An item quoted 200-350 by different
+        suppliers has a spread of about 0.27; an item every supplier bills at
+        9.00 has a spread of 0.
+        """
+        if self.median_unit_price <= 0 or self.observations < 2:
+            return 0.0
+        half_range = (self.max_unit_price - self.min_unit_price) / 2.0
+        return half_range / self.median_unit_price
+
+    def band(self, floor: float, slack: float = 1.5, min_observations: int = 3) -> float:
+        """The deviation beyond which this item's price is unusual *for it*.
+
+        The observed spread, widened by `slack` because a handful of
+        observations under-states a distribution's true range, and never
+        tighter than `floor`. Below `min_observations` there is not enough
+        evidence to estimate a spread, so the floor applies alone.
+        """
+        if self.observations < min_observations:
+            return floor
+        return max(floor, self.observed_spread * slack)
+
 
 @dataclass
 class VendorRecord:

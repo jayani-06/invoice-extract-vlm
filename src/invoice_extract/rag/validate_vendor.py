@@ -362,13 +362,17 @@ def validate_against_master(
 
         # A vendor's own contract price barely moves, so a small deviation is
         # already meaningful. Pooled market prices legitimately vary between
-        # suppliers, so that comparison needs a much wider band or it flags
-        # ordinary price differences as fraud.
-        review_at, fail_at = (
-            (PRICE_DEVIATION_REVIEW, PRICE_DEVIATION_FAIL)
-            if source == "vendor"
-            else (MARKET_DEVIATION_REVIEW, MARKET_DEVIATION_FAIL)
-        )
+        # suppliers, and by different amounts per item -- so that band is taken
+        # from the spread the item actually shows rather than assumed flat.
+        #
+        # The flat percentages remain as floors. An item every supplier bills
+        # at the same price has no spread, and without a floor any rounding
+        # would read as an anomaly.
+        if source == "vendor":
+            review_at, fail_at = PRICE_DEVIATION_REVIEW, PRICE_DEVIATION_FAIL
+        else:
+            review_at = rate.band(MARKET_DEVIATION_REVIEW)
+            fail_at = max(MARKET_DEVIATION_FAIL, review_at * 2.5)
 
         deviation = rate.deviation(float(price))
         if abs(deviation) >= fail_at:
@@ -379,12 +383,19 @@ def validate_against_master(
             continue
 
         against = "this vendor's usual" if source == "vendor" else "the market"
+        # Say which band was applied, so a reviewer can tell a tight-priced
+        # item from a loosely-priced one without opening the ledger.
+        band_note = (
+            ""
+            if source == "vendor"
+            else f" (band {review_at:.0%}, from {rate.observations} observations)"
+        )
         checks.append(
             Check(
                 "price_deviation",
                 verdict,
                 f"Line {i + 1} at {price:,.2f} is {deviation:+.0%} against "
-                f"{against} {rate.median_unit_price:,.2f}",
+                f"{against} {rate.median_unit_price:,.2f}{band_note}",
                 {
                     "index": i,
                     "description": item.get("description"),
@@ -393,6 +404,8 @@ def validate_against_master(
                     "reference_source": source,
                     "deviation": round(deviation, 4),
                     "observations": rate.observations,
+                    "review_band": round(review_at, 4),
+                    "observed_spread": round(rate.observed_spread, 4),
                 },
             )
         )
