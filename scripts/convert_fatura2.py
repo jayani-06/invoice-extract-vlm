@@ -52,7 +52,12 @@ def download(split: str, dest: Path) -> Path:
         return path
     url = f"{BASE}/{SPLIT_FILES[split]}"
     print(f"  downloading {url}", file=sys.stderr)
-    urllib.request.urlretrieve(url, path)  # noqa: S310 - fixed https URL
+    # Download to a sibling .part file and rename only on success: a dropped
+    # connection otherwise leaves a truncated parquet > 1 MB that the cache
+    # check above would silently accept on the next run.
+    part = path.with_suffix(".parquet.part")
+    urllib.request.urlretrieve(url, part)  # noqa: S310 - fixed https URL
+    part.replace(path)
     print(f"  saved {path} ({path.stat().st_size / 1e6:.1f} MB)", file=sys.stderr)
     return path
 
