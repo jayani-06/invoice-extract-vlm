@@ -156,4 +156,78 @@ def get_retriever(kind: str = "tfidf", **kwargs):
         return TfidfRetriever(**kwargs)
     if kind == "dense":
         return DenseRetriever(**kwargs)
-    raise KeyError(f"unknown retriever {kind!r}; have 'tfidf' and 'dense'")
+    if kind == "hybrid":
+        return HybridRetriever(**kwargs)
+    raise KeyError(f"unknown retriever {kind!r}; have 'tfidf', 'dense' and 'hybrid'")
+
+
+@dataclass
+class HybridRetriever:
+    """TF-IDF and dense embeddings together, fused per entry.
+
+    The two answer different questions and the ledger contains cases only one
+    of them can reach. Measured on this project's ledger:
+
+    | query | TF-IDF | dense |
+    |---|---|---|
+    | `Courier Charges (per consignment)` (near-exact) | **0.88** | 0.84 |
+    | `A4 PAPER 500SH` (surface variant) | 0.44 | **0.67** |
+    | `cordless pointing device` (pure synonym) | 0.18 | **0.32** |
+    | `something totally unrelated zzz qqq` | **0.07** | 0.22 |
+
+    So TF-IDF is slightly better on near-exact matches and *much* better at
+    saying "nothing here"; dense is better everywhere in between.
+
+    That last row is why the fusion is not a plain maximum. Sentence
+    embeddings are not well separated at the low end -- unrelated text still
+    scores ~0.22 -- so taking the max would lift every irrelevant neighbour
+    above the categoriser's 0.25 floor and quietly destroy its ability to
+    abstain. Abstention is the property that makes this safe in front of a
+    ledger, and it is not worth trading for a point of accuracy.
+
+    Instead the dense score is **rescaled** so that its noise floor maps to
+    TF-IDF's: a dense score at or below `dense_floor` contributes nothing, and
+    the range above it is stretched back over [0, 1]. The fused score is then
+    the maximum of the two on a comparable scale, which keeps the existing
+    thresholds meaningful and keeps `Match.score` a similarity in [0, 1].
+    """
+
+    model_name: str = DEFAULT_MODEL
+    #: Below this, a dense score is noise. Measured: unrelated text scores
+    #: ~0.22, a genuine synonym ~0.32, a near-exact match ~0.84.
+    dense_floor: float = 0.25
+    entries: list[LedgerEntry] = field(default_factory=list)
+    _tfidf: Any = None
+    _dense: Any = None
+
+    def index(self, entries: list[LedgerEntry]) -> None:
+        from invoice_extract.rag.store import TfidfRetriever
+
+        self.entries = list(entries)
+        self._tfidf = TfidfRetriever()
+        self._tfidf.index(entries)
+        self._dense = DenseRetriever(model_name=self.model_name)
+        self._dense.index(entries)
+
+    def _rescale(self, score: float) -> float:
+        if score <= self.dense_floor:
+            return 0.0
+        return (score - self.dense_floor) / (1.0 - self.dense_floor)
+
+    def search(self, query: str, k: int = 5) -> list[Match]:
+        if not self.entries:
+            return []
+        # Over-fetch from each side: an entry ranked 6th by one retriever and
+        # 1st by the other must survive to be fused.
+        wide = max(k * 4, 20)
+        best: dict[int, Match] = {}
+        for match in self._tfidf.search(query, k=wide):
+            best[id(match.entry)] = match
+        for match in self._dense.search(query, k=wide):
+            fused = self._rescale(match.score)
+            existing = best.get(id(match.entry))
+            if existing is None:
+                best[id(match.entry)] = Match(entry=match.entry, score=fused)
+            elif fused > existing.score:
+                best[id(match.entry)] = Match(entry=existing.entry, score=fused)
+        return sorted(best.values(), key=lambda m: -m.score)[:k]

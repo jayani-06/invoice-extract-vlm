@@ -38,6 +38,13 @@ from invoice_extract.rag.categorize import categorize_line_item  # noqa: E402
 from invoice_extract.rag.store import LedgerEntry, VendorStats  # noqa: E402
 from invoice_extract.rag.taxonomy import account_name  # noqa: E402
 
+# Imported from the builder rather than restated, so the evaluator can never
+# disagree with what was actually injected.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_ledger import HELD_OUT_KINDS  # noqa: E402
+
+HELD_OUT = set(HELD_OUT_KINDS)
+
 #: Which injected anomaly each flag code is evidence for. A document counts as
 #: detected when any flag maps to a kind that was actually injected.
 #: Scenarios deliberately held out: no detector was written for them. They are
@@ -78,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--retriever",
         default="tfidf",
-        choices=["tfidf", "dense"],
+        choices=["tfidf", "dense", "hybrid"],
         help="tfidf = character n-grams (the measured floor). dense = sentence "
         "embeddings, which is what the Phase 3 plan called for.",
     )
@@ -223,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # --------------------------------------------------- anomaly detection
     doc_tp = doc_fp = doc_fn = 0
+    held_tp = held_fn = 0
     per_kind = defaultdict(lambda: {"injected": 0, "detected": 0})
     flag_counts: Counter = Counter()
     anom_ms = 0.0
@@ -252,10 +260,19 @@ def main(argv: list[str] | None = None) -> int:
             if kind in raised_kinds:
                 per_kind[kind]["detected"] += 1
 
-        if injected and raised_kinds & injected:
-            doc_tp += 1
-        elif injected:
-            doc_fn += 1
+        if injected:
+            caught = bool(raised_kinds & injected)
+            # Separate the two readings. A probe scenario sitting in the same
+            # counters as the designed-for ones makes "recall" answer neither
+            # question cleanly: it is not "do the detectors work" and not
+            # "what do they not see".
+            if injected & HELD_OUT:
+                held_tp += caught
+                held_fn += not caught
+            elif caught:
+                doc_tp += 1
+            else:
+                doc_fn += 1
         elif actionable:
             doc_fp += 1
             if len(false_positive_examples) < 5:
@@ -265,6 +282,13 @@ def main(argv: list[str] | None = None) -> int:
 
     precision = doc_tp / (doc_tp + doc_fp) if (doc_tp + doc_fp) else float("nan")
     recall = doc_tp / (doc_tp + doc_fn) if (doc_tp + doc_fn) else float("nan")
+    held_total = held_tp + held_fn
+    recall_all = (
+        (doc_tp + held_tp) / (doc_tp + doc_fn + held_total)
+        if (doc_tp + doc_fn + held_total)
+        else float("nan")
+    )
+    held_recall = held_tp / held_total if held_total else float("nan")
     n_clean = sum(1 for r in evaluation["records"] if not r["anomalies"])
     fp_rate = doc_fp / n_clean if n_clean else float("nan")
 
@@ -295,6 +319,14 @@ def main(argv: list[str] | None = None) -> int:
         "anomaly": {
             "precision": precision,
             "recall": recall,
+            "recall_designed_for_only": recall,
+            "recall_including_held_out": recall_all,
+            "held_out": {
+                "kinds": sorted(HELD_OUT),
+                "injected": held_total,
+                "detected": held_tp,
+                "recall": held_recall,
+            },
             "f1": f1(precision, recall),
             "false_positive_rate_on_clean": fp_rate,
             "documents_with_anomalies": doc_tp + doc_fn,
@@ -387,7 +419,9 @@ def main(argv: list[str] | None = None) -> int:
         f"coverage {fmt(coverage)}, macro-F1 {fmt(macro_f1)}"
     )
     print(
-        f"Anomaly         P {fmt(precision)} / R {fmt(recall)}, " f"FP rate on clean {fmt(fp_rate)}"
+        f"Anomaly         P {fmt(precision)} / R {fmt(recall)} designed-for, "
+        f"{fmt(recall_all)} incl. held-out ({held_tp}/{held_total}), "
+        f"FP rate on clean {fmt(fp_rate)}"
     )
     print(f"\nWrote {args.out / 'rag_eval.md'}")
     return 0

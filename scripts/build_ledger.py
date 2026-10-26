@@ -98,20 +98,35 @@ def vary(description: str, rng: random.Random) -> str:
     return text.strip()
 
 
-ANOMALY_KINDS = (
+#: Scenarios the detectors were written to catch.
+DESIGNED_FOR_KINDS = (
     "duplicate_invoice_number",
     "inflated_total",
     "invalid_gst_rate",
     "future_invoice_date",
     "corrupt_gstin",
-    # --- Scenarios the detectors were NOT designed for -------------------
-    # Added deliberately after Phase 3 and 4 both scored perfectly against
-    # anomalies we had written the detectors to catch. A detector evaluated
-    # only on its own design brief measures nothing. These two are held out:
-    # if they are missed, that is the honest result and gets reported.
+)
+
+#: Scenarios the detectors were NOT designed for, kept as a permanent probe.
+#:
+#: Added after Phase 3 and 4 both scored perfectly against anomalies we had
+#: written the detectors to catch. A detector evaluated only on its own design
+#: brief measures nothing. If these are missed, that is the honest result and
+#: it gets reported.
+#:
+#: Drawn from a **separate pool at their own rate**, which matters for more
+#: than sample size. Sharing one pool with the designed-for scenarios means
+#: adding a probe silently moves the designed-for recall, because it takes
+#: cases out of that metric's denominator -- so the two readings would not be
+#: comparable across runs. Phase 4 has drawn its probes separately since they
+#: were introduced; this brings Phase 3 into line.
+HELD_OUT_KINDS = (
     "line_item_padding",
     "gstin_state_contradicts_address",
 )
+
+#: Everything `inject` knows how to produce.
+ANOMALY_KINDS = DESIGNED_FOR_KINDS + HELD_OUT_KINDS
 
 
 def inject(doc: dict, kind: str, rng: random.Random, donor: dict | None) -> dict | None:
@@ -198,6 +213,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", type=Path, default=Path("data/processed/ledger"))
     ap.add_argument("--ledger-size", type=int, default=100)
     ap.add_argument("--anomaly-rate", type=float, default=0.2)
+    ap.add_argument(
+        "--held-out-rate",
+        type=float,
+        default=0.35,
+        help="Rate at which HELD_OUT_KINDS are injected among documents not "
+        "already carrying a designed-for anomaly. High on purpose: the probe "
+        "needs enough cases to report 0/n credibly. Each landed once when the "
+        "two pools were shared.",
+    )
     ap.add_argument("--seed", type=int, default=20260920)
     ap.add_argument(
         "--no-variants",
@@ -264,7 +288,16 @@ def main(argv: list[str] | None = None) -> int:
 
         anomalies = []
         if rng.random() < args.anomaly_rate:
-            kind = rng.choice(ANOMALY_KINDS)
+            kind = rng.choice(DESIGNED_FOR_KINDS)
+            donor = ledger_docs[rng.randrange(len(ledger_docs))]
+            if inject(doc, kind, rng, donor) is not None:
+                anomalies.append(kind)
+                injected_counter[kind] += 1
+        elif rng.random() < args.held_out_rate:
+            # Own pool, own rate, drawn only from documents not already
+            # carrying a designed-for anomaly -- so one scenario can never
+            # mask the other and neither metric moves when the other changes.
+            kind = rng.choice(HELD_OUT_KINDS)
             donor = ledger_docs[rng.randrange(len(ledger_docs))]
             if inject(doc, kind, rng, donor) is not None:
                 anomalies.append(kind)
@@ -289,6 +322,9 @@ def main(argv: list[str] | None = None) -> int:
                 "seed": args.seed,
                 "variants": not args.no_variants,
                 "anomaly_rate": args.anomaly_rate,
+                "held_out_rate": args.held_out_rate,
+                "designed_for_kinds": list(DESIGNED_FOR_KINDS),
+                "held_out_kinds": list(HELD_OUT_KINDS),
                 "records": eval_records,
             },
             indent=1,
