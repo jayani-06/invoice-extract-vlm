@@ -118,6 +118,68 @@ def not_run(message: str) -> None:
     st.info(f"Not run: {message}")
 
 
+@st.cache_data(show_spinner=False)
+def load_corpus_pages() -> dict | None:
+    """Every page in the image corpus, indexed by document and profile.
+
+    Returns None when the corpus has not been built, so screen 1 can fall back
+    to the cached documents and say that it did.
+    """
+    manifest = ROOT / "data/processed/gst_in_synthetic/manifest.jsonl"
+    if not manifest.exists():
+        return None
+    paths: dict[tuple[str, str], str] = {}
+    profiles: dict[str, list[str]] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        paths[(row["doc_id"], row["profile"])] = row["image_path"]
+        profiles.setdefault(row["doc_id"], []).append(row["profile"])
+    if not paths:
+        return None
+    order = ["clean", "light", "medium", "heavy"]
+    return {
+        "paths": paths,
+        "doc_ids": sorted(profiles),
+        "profiles": {
+            d: sorted(ps, key=lambda p: order.index(p) if p in order else 99)
+            for d, ps in profiles.items()
+        },
+    }
+
+
+@st.cache_data(show_spinner="cleaning the page…", max_entries=64)
+def preprocess_live(doc_id: str, profile: str, config: str):
+    """Run one page through one configuration, here and now.
+
+    About a second, which is well inside what a demo can absorb -- and unlike
+    the OCR stages it needs no cache, so screen 1 is not limited to the four
+    documents the cache holds.
+    """
+    import time
+
+    import numpy as np
+    from PIL import Image as PILImage
+
+    from invoice_extract.preprocess.pipeline import make_pipeline
+
+    pages = load_corpus_pages()
+    rel = pages["paths"].get((doc_id, profile)) if pages else None
+    if not rel:
+        return None, None, None
+    source = ROOT / "data/processed/gst_in_synthetic" / rel
+    if not source.exists():
+        return None, None, None
+
+    before = PILImage.open(source)
+    array = np.array(before.convert("L"))
+    t0 = time.perf_counter()
+    result = make_pipeline(config)(array)
+    elapsed = (time.perf_counter() - t0) * 1000
+    return before, PILImage.fromarray(result.image), elapsed
+
+
 @st.cache_resource(show_spinner=False)
 def load_knowledge():
     """The ledger, the retriever and the vendor master.
@@ -269,13 +331,38 @@ if screen.startswith("1"):
         "then pick how much cleanup to apply."
     )
 
-    doc = pick_document(OURS, "pipe_doc")
+    corpus_pages = load_corpus_pages()
+    if corpus_pages:
+        st.caption(
+            f"Preprocessing runs live here, on any of the "
+            f"**{len(corpus_pages['doc_ids'])} invoices** in the corpus. No OCR is "
+            "involved in this screen, so there is nothing to precompute and no "
+            "reason to limit it to the handful the cache holds."
+        )
+        doc_ids = corpus_pages["doc_ids"]
+        chosen_id = st.select_slider(
+            "Invoice",
+            options=doc_ids,
+            value=doc_ids[0],
+            key="pipe_live_doc",
+        )
+        doc = None
+    else:
+        not_run("the image corpus is not built; falling back to the cached documents")
+        doc = pick_document(OURS, "pipe_doc")
+        chosen_id = None
+
     col_a, col_b = st.columns(2)
     with col_a:
+        available = (
+            corpus_pages["profiles"].get(chosen_id, [])
+            if corpus_pages
+            else [p for p in ["clean", "medium", "heavy"] if p in doc["profiles"]]
+        )
         profile = st.select_slider(
             "Scan damage",
-            options=[p for p in ["clean", "medium", "heavy"] if p in doc["profiles"]],
-            value="medium" if "medium" in doc["profiles"] else doc["profiles"][0],
+            options=available,
+            value="medium" if "medium" in available else available[0],
         )
     with col_b:
         # Plain-English labels with the measured verdict attached. The internal
@@ -298,21 +385,28 @@ if screen.startswith("1"):
     else:
         st.info(verdict)
 
+    if corpus_pages:
+        before, after, elapsed_ms = preprocess_live(chosen_id, profile, config)
+    else:
+        before, after, elapsed_ms = (
+            image_for(doc, profile),
+            image_for(doc, f"{profile}__{config}"),
+            None,
+        )
+
     left, right = st.columns(2)
     with left:
         st.markdown("### Scanned input")
         st.caption(f"`{profile}` damage, straight from the scanner")
-        img = image_for(doc, profile)
-        if img:
-            st.image(img, use_container_width=True)
+        if before:
+            st.image(before, use_container_width=True)
     with right:
         st.markdown("### After cleanup")
-        st.caption(f"`{config}`")
-        img = image_for(doc, f"{profile}__{config}")
-        if img:
-            st.image(img, use_container_width=True)
+        st.caption(f"`{config}`" + (f" — {elapsed_ms:.0f} ms" if elapsed_ms is not None else ""))
+        if after:
+            st.image(after, use_container_width=True)
         else:
-            not_run(f"no cached preprocessing for {profile} / {config}")
+            not_run(f"no preprocessing available for {profile} / {config}")
 
     st.markdown("---")
     st.markdown("**What each option does, and what it costs**")
