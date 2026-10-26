@@ -142,6 +142,61 @@ variance exceeded the differences being measured, which makes a ranking table
 an artefact of which 4 documents were drawn. n = 15 is reported here; it is
 still thin, and the caveat below stands.
 
+### P1.5: the PP-OCRv6 medium models change the answer
+
+All the numbers above use `fast=True` (PP-OCRv5 mobile), chosen for a 2.6x
+speedup. Re-running `clean` and `medium` with the **default PP-OCRv6 medium**
+models, 5 documents per cell, 170 minutes:
+
+| | CER clean | CER medium | Word acc clean | Word acc medium |
+|---|---|---|---|---|
+| `raw` v5-fast → v6-medium | 0.0066 → **0.0009** | 0.0812 → **0.0114** | 0.5733 → 0.6883 | 0.4281 → 0.5789 |
+| `gray+border+deskew` | 0.0066 → 0.0009 | 0.0845 → 0.0366 | 0.5562 → **0.6923** | 0.4616 → **0.6579** |
+| `full(no-binarize)` | 0.0083 → 0.0006 | 0.1124 → 0.0316 | 0.4842 → 0.6619 | 0.4918 → 0.6538 |
+| `full+sauvola` | 0.0365 → 0.0025 | 0.1459 → 0.0781 | 0.4938 → 0.6680 | 0.4596 → 0.5891 |
+
+Three things follow, and the first is the important one.
+
+**1. The CER exit criterion passes on `medium` with these models.** 0.0114
+against a 0.0800 target, where the mobile models gave 0.0812 and missed. A
+7-fold reduction from a model swap. `heavy` has not yet been measured with
+v6-medium, so **the criterion is not yet settled** — the headline "both exit
+criteria failed" is now specifically a statement about the *mobile* models, and
+it is stated that way until the heavy run lands.
+
+**2. The ranking changed again, in 3 of 4 cells.**
+
+| Metric | Profile | Best v5-fast | Best v6-medium |
+|---|---|---|---|
+| CER | clean | `gray+border+deskew` | `full(no-binarize)` (0.0006 vs 0.0009 — noise) |
+| CER | medium | `raw` | `raw` |
+| Word accuracy | clean | `raw` | **`gray+border+deskew`** |
+| Word accuracy | medium | `full(no-binarize)` | **`gray+border+deskew`** |
+
+So the pipeline ranking is not a property of the pipeline. It depends on n (the
+n=4 → n=15 re-run changed 4 of 6 cells) *and* on which recognition model is
+behind it. Any claim of the form "pipeline X is best" in this project is
+conditional on both, and should be read that way.
+
+**3. The clean-page preprocessing penalty largely disappears.** On v5-fast,
+`raw` beat the full chain on clean pages by 8.9 points of word accuracy, which
+is the measurement `preprocess/triage.py` was built to act on. On v6-medium the
+gap is 2.6 points against the full chain, and deskew is *marginally ahead* of
+raw (0.6923 vs 0.6883, well inside noise at n=5). **The adaptive policy's
+benefit is therefore model-dependent**, and the forthcoming
+`reports/phase1_adaptive` validation measures it against the mobile models
+only. A stronger recogniser needs less help, which is the expected direction
+but was not something this project had evidence for before.
+
+Cost: 2.7-2.9x slower (98.9 s vs 36.8 s per page on clean). The 2.6x figure in
+`ocr/paddle.py` is confirmed.
+
+**n = 5 per cell.** Far thinner than the n=15 above, and the lesson from the
+n=4 sweep applies with full force: the clean CER column separates by 0.0003 and
+means nothing. The large effects — the 7-fold medium CER drop and the ~15-point
+word-accuracy gain across every row — are far too big to be sampling noise. The
+per-cell orderings are not.
+
 ### Caveats on these numbers
 
 - **n = 15 documents per cell**, 92.6 minutes on CPU. Adjacent rows differ by
@@ -154,8 +209,10 @@ still thin, and the caveat below stands.
   punctuation into separate tokens (`Salai` `,`), so predicted word counts run
   ~1.8x gold. That depresses precision independently of recognition quality,
   which is part of why absolute detection F1 looks low even on clean pages.
-- **`fast=True` models.** PP-OCRv5 mobile, chosen for a 2.6x speedup. The
-  larger PP-OCRv6 medium models may rank the pipelines differently.
+- **`fast=True` models for everything above.** PP-OCRv5 mobile, chosen for a
+  2.6x speedup. The PP-OCRv6 medium models **do** rank the pipelines
+  differently, and are far more accurate — see P1.5 above. Every n=15 figure in
+  this document is a mobile-model figure.
 
 ---
 

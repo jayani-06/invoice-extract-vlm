@@ -88,9 +88,18 @@ limitation. What remains a limitation is everything around it:
   splits punctuation into separate tokens (`Salai` `,`), so predicted word
   counts run ~1.8x gold and precision drops for reasons unrelated to reading
   quality.
-- **Only the PP-OCRv5 mobile models are measured** (`fast=True`, chosen for a
-  2.6x speedup). Whether the larger PP-OCRv6 models rank the pipelines
-  differently is open.
+- **The headline Phase 1 numbers are mobile-model numbers.** PP-OCRv6 medium
+  cuts `medium` CER 7-fold (0.0812 → 0.0114) and **passes the CER exit
+  criterion** there, at 2.8x the cost. It also re-orders the pipeline ranking
+  in 3 of 4 measured cells. `heavy` is not yet measured with v6, so "both exit
+  criteria failed" is currently a claim about `fast=True` only. n=5 per cell.
+- **The pipeline ranking is not a property of the pipeline.** It moved when n
+  went 4 → 15 (4 of 6 cells) and again when the recognition model changed (3 of
+  4 cells). Any "pipeline X is best" claim here is conditional on both.
+- **The adaptive preprocessing policy is calibrated against the mobile
+  models.** The 8.9-point clean-page penalty it exists to avoid shrinks to 2.6
+  points under PP-OCRv6 medium, so its value is model-dependent and currently
+  unquantified for the stronger models.
 - **Tesseract is implemented but never benchmarked.** It needs a system binary
   that is not installed here.
 
