@@ -180,6 +180,68 @@ def preprocess_live(doc_id: str, profile: str, config: str):
     return before, PILImage.fromarray(result.image), elapsed
 
 
+@st.cache_data(show_spinner=False)
+def sroie_pages() -> dict | None:
+    """The real photographed receipts, in the same shape as the invoice pages."""
+    manifest = ROOT / "data/processed/sroie/manifest.jsonl"
+    if not manifest.exists():
+        return None
+    paths: dict[tuple[str, str], str] = {}
+    profiles: dict[str, list[str]] = {}
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        paths[(row["doc_id"], row["profile"])] = row["image_path"]
+        profiles.setdefault(row["doc_id"], []).append(row["profile"])
+    if not paths:
+        return None
+    return {"paths": paths, "doc_ids": sorted(profiles), "profiles": profiles}
+
+
+@st.cache_data(show_spinner="reading the page… 40-70s, cached afterwards", max_entries=24)
+def run_ocr_live(corpus_dir: str, doc_id: str, profile: str):
+    """Run the real OCR engine on one page.
+
+    The only stage in this demo expensive enough to normally precompute. It is
+    done live here anyway, because screen 2's whole job is to show what the
+    engine actually returns, and limiting that to eight cached pages leaves the
+    obvious question -- does it work on anything else? -- unanswered.
+
+    Cached per (page, damage level), so the cost is paid once.
+    """
+    import numpy as np
+    from PIL import Image as PILImage
+
+    pages = sroie_pages() if corpus_dir == "sroie" else load_corpus_pages()
+    rel = pages["paths"].get((doc_id, profile)) if pages else None
+    if not rel:
+        return None, None
+    source = ROOT / "data/processed" / corpus_dir / rel
+    if not source.exists():
+        return None, None
+
+    from invoice_extract.ocr.base import OcrEngineUnavailableError, get_engine
+    from invoice_extract.preprocess.pipeline import make_pipeline
+
+    try:
+        engine = get_engine("paddle", fast=True)
+    except OcrEngineUnavailableError:
+        return PILImage.open(source), None
+
+    image = PILImage.open(source)
+    pre = make_pipeline("adaptive")(np.array(image.convert("L")))
+    recognised = engine.recognize(pre.image)
+    return (
+        PILImage.fromarray(pre.image),
+        {
+            "words": [{"text": w.text, "bbox": list(w.bbox)} for w in recognised.words],
+            "text": recognised.text,
+            "ms": recognised.elapsed_ms,
+        },
+    )
+
+
 @st.cache_data(show_spinner="extracting…", max_entries=64)
 def extract_from_gold(doc_id: str) -> dict | None:
     """Extract one corpus document from the renderer's ground-truth text.
@@ -490,19 +552,58 @@ elif screen.startswith("2"):
     st.title("2. Reading the page")
     st.write("PaddleOCR output. Boxes are what it found; the table lists what it read.")
 
-    with_ocr = [d for d in OURS if d["has_ocr"]]
-    if not with_ocr:
-        not_run(
-            "no OCR in the cache. Rebuild with OCR enabled:\n\n"
-            "```\npython scripts/build_demo_cache.py\n```"
+    sources = ["Cached pages (instant)"]
+    if load_corpus_pages():
+        sources.append("Any invoice (runs OCR, ~40s)")
+    if sroie_pages():
+        sources.append("A real photographed receipt (runs OCR, ~70s)")
+    source = st.radio("Page", sources, horizontal=True, key="ocr_source")
+
+    if source.startswith("Cached"):
+        with_ocr = [d for d in OURS if d["has_ocr"]]
+        if not with_ocr:
+            not_run(
+                "no OCR in the cache. Rebuild with OCR enabled:\n\n"
+                "```\npython scripts/build_demo_cache.py\n```"
+            )
+            st.stop()
+        doc = pick_document(with_ocr, "ocr_doc")
+        key = st.selectbox("Which run", list(doc["ocr"]))
+        result = doc["ocr"][key]
+        img = image_for(doc, key) or image_for(doc, key.split("__")[0])
+    else:
+        receipts = source.startswith("A real")
+        pages = sroie_pages() if receipts else load_corpus_pages()
+        doc_ids = pages["doc_ids"]
+        chosen_id = st.select_slider(
+            "Receipt" if receipts else "Invoice",
+            options=doc_ids,
+            value=doc_ids[0],
+            key="ocr_live_doc",
         )
-        st.stop()
-
-    doc = pick_document(with_ocr, "ocr_doc")
-    key = st.selectbox("Which run", list(doc["ocr"]))
-    result = doc["ocr"][key]
-
-    img = image_for(doc, key) or image_for(doc, key.split("__")[0])
+        profiles = pages["profiles"].get(chosen_id, ["clean"])
+        profile = st.select_slider(
+            "Scan damage",
+            options=profiles,
+            value="medium" if "medium" in profiles else profiles[0],
+            key="ocr_live_profile",
+        )
+        if receipts:
+            st.caption(
+                "A photograph of an actual Malaysian retail receipt -- thermal "
+                "print, creases, barcodes. The only real documents in this "
+                "project; everything else is generated."
+            )
+        st.caption(
+            "OCR runs here and now: about 40s for a rendered invoice and 70s for a "
+            "photographed receipt, which are slower because they are larger and "
+            "noisier. Cached afterwards, so going back to a page is instant."
+        )
+        corpus_dir = "sroie" if receipts else "gst_in_synthetic"
+        img, result = run_ocr_live(corpus_dir, chosen_id, profile)
+        if result is None:
+            not_run("OCR is unavailable; install the paddle extra to read pages here")
+            st.stop()
     left, right = st.columns([3, 2])
     with left:
         if img:
