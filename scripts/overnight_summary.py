@@ -159,7 +159,10 @@ for label, rel in [
     if not data:
         w(f"| {label} | **not measured** | — | — | — | — | — |")
         continue
-    cat = data.get("categorisation") or {}
+    # The runner writes "categorization" (US). Reading the British
+    # spelling printed "not measured" over numbers that were right there,
+    # which is the summary lying about its own inputs.
+    cat = data.get("categorization") or data.get("categorisation") or {}
     an = data.get("anomaly") or {}
     w(
         f"| {label} | {f(cat.get('accuracy'))} | {f(cat.get('macro_f1'))} "

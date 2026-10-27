@@ -99,6 +99,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--generator-model", default=None, help="Override the LLM checkpoint")
     ap.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Evaluate only the first N documents. The generated path costs ~3s "
+        "per LINE ITEM, so the full split is 1642 calls and over an hour; a "
+        "sample of 50 documents is a few hundred decisions, which is ample to "
+        "compare against the vote and does not hold up everything behind it.",
+    )
+    ap.add_argument(
         "--today",
         default="2026-09-20",
         help="Reference date for the future-date rule. Fixed by default so the "
@@ -177,7 +186,20 @@ def main(argv: list[str] | None = None) -> int:
     confusion: dict[str, Counter] = defaultdict(Counter)
     cat_ms = 0.0
 
-    for record in evaluation["records"]:
+    records = evaluation["records"]
+    if args.limit:
+        records = records[: args.limit]
+        print(
+            f"Evaluating {len(records)} of {len(evaluation['records'])} documents", file=sys.stderr
+        )
+
+    # Progress, because the generated path takes minutes to hours and printing
+    # nothing makes "working" and "hung" look identical. run_extraction.py has
+    # had this all along, which is exactly why its long runs were watchable and
+    # this one was not.
+    for doc_index, record in enumerate(records, start=1):
+        if generator is not None and (doc_index % 10 == 0 or doc_index == len(records)):
+            print(f"  {doc_index}/{len(records)} documents", file=sys.stderr, flush=True)
         doc = record["document"]
         vendor = ((doc.get("parties") or {}).get("vendor") or {}).get("name")
         for item, truth in zip(
@@ -236,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     anom_ms = 0.0
     false_positive_examples = []
 
-    for record in evaluation["records"]:
+    for record in records:
         doc = record["document"]
         injected = set(record["anomalies"])
         t = time.perf_counter()
@@ -289,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
         else float("nan")
     )
     held_recall = held_tp / held_total if held_total else float("nan")
-    n_clean = sum(1 for r in evaluation["records"] if not r["anomalies"])
+    n_clean = sum(1 for r in records if not r["anomalies"])
     fp_rate = doc_fp / n_clean if n_clean else float("nan")
 
     # ------------------------------------------------------------- report
