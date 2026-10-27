@@ -80,6 +80,20 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     ap.add_argument("--ocr-engine", default="tesseract")
+    ap.add_argument(
+        "--fast",
+        action="store_true",
+        default=True,
+        help="PP-OCRv5 mobile models, ~40s/page. This is the default because "
+        "every Phase 1 figure is a mobile-model figure and mixing the two "
+        "makes runs incomparable.",
+    )
+    ap.add_argument(
+        "--accurate",
+        dest="fast",
+        action="store_false",
+        help="PP-OCRv6 medium models, ~100s/page.",
+    )
     ap.add_argument("--preprocess-config", default="full(no-binarize)")
     ap.add_argument("--vision-only", action="store_true", help="VLM only: drop the OCR hint")
     ap.add_argument("--day-first", action="store_true", default=True)
@@ -176,7 +190,13 @@ def main(argv: list[str] | None = None) -> int:
         from invoice_extract.preprocess.pipeline import make_pipeline
 
         try:
-            ocr_engine = get_engine(args.ocr_engine)
+            # Without this the paddle adapter loads PP-OCRv6 *medium*, which
+            # is ~100s a page against ~40s for the mobile models -- a 2.6x
+            # difference that turned a SROIE run into four and a half hours.
+            # Phase 1's figures are mobile-model figures, so defaulting to the
+            # larger models here also made this run incomparable with them.
+            engine_kwargs = {"fast": args.fast} if args.ocr_engine == "paddle" else {}
+            ocr_engine = get_engine(args.ocr_engine, **engine_kwargs)
         except OcrEngineUnavailableError as exc:
             print(f"\nOCR engine unavailable:\n{exc}\n", file=sys.stderr)
             return 3
@@ -297,6 +317,9 @@ def main(argv: list[str] | None = None) -> int:
         "profile": args.profile,
         "ocr_source": args.ocr_source,
         "ocr_engine": args.ocr_engine if args.ocr_source == "engine" else None,
+        "ocr_models": (
+            ("mobile" if args.fast else "medium") if args.ocr_source == "engine" else None
+        ),
         "vision_only": args.vision_only,
         "is_ocr_ceiling": args.ocr_source == "gold",
         "n_docs": stats["n"],
