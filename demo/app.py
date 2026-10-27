@@ -180,6 +180,60 @@ def preprocess_live(doc_id: str, profile: str, config: str):
     return before, PILImage.fromarray(result.image), elapsed
 
 
+@st.cache_data(show_spinner="extracting…", max_entries=64)
+def extract_from_gold(doc_id: str) -> dict | None:
+    """Extract one corpus document from the renderer's ground-truth text.
+
+    Milliseconds, because no OCR engine runs: the corpus ships word boxes, and
+    `reading_order_text` turns them into the same line-grouped string an engine
+    would produce. That makes this a perfect-OCR CEILING extraction, which the
+    screen states rather than leaving to be inferred.
+    """
+    corpus = ROOT / "data/processed/gst_in_synthetic"
+    manifest = corpus / "manifest.jsonl"
+    if not manifest.exists():
+        return None
+
+    row = None
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        candidate = json.loads(line)
+        if candidate["doc_id"] == doc_id and candidate["profile"] == "clean":
+            row = candidate
+            break
+    if row is None:
+        return None
+
+    gold_path = corpus / row["ocr_gold_path"]
+    canonical = corpus / "canonical" / f"{doc_id}.json"
+    if not gold_path.exists() or not canonical.exists():
+        return None
+
+    from invoice_extract.models.postprocess import finalize
+    from invoice_extract.models.registry import get_extractor
+    from invoice_extract.reading_order import reading_order_text
+
+    gold = json.loads(gold_path.read_text(encoding="utf-8"))
+    text = reading_order_text(gold["words"], lambda w: tuple(w["bbox"]), lambda w: w["text"])
+    truth = json.loads(canonical.read_text(encoding="utf-8"))
+    raw = get_extractor("rules").predict_from_text(text)
+    document, _ = finalize(
+        raw,
+        doc_id=doc_id,
+        source=truth.get("source", {"dataset": "other", "original_id": doc_id, "split": "test"}),
+        pages=[
+            {
+                "page_index": 0,
+                "image_path": row["image_path"],
+                "width": row["width"],
+                "height": row["height"],
+            }
+        ],
+    )
+    return document
+
+
 @st.cache_resource(show_spinner=False)
 def load_knowledge():
     """The ledger, the retriever and the vendor master.
@@ -543,9 +597,27 @@ elif screen.startswith("4"):
         from invoice_extract.rag.categorize import categorize_document
         from invoice_extract.rag.validate_vendor import validate_against_master
 
-        doc = pick_document(OURS, "rag_doc")
-        extraction = doc["extractions"].get("rules") or next(iter(doc["extractions"].values()))
-        document = extraction["document"]
+        corpus_pages = load_corpus_pages()
+        if corpus_pages:
+            doc_ids = corpus_pages["doc_ids"]
+            chosen_id = st.select_slider(
+                "Invoice", options=doc_ids, value=doc_ids[0], key="rag_live_doc"
+            )
+            document = extract_from_gold(chosen_id)
+            if document is None:
+                not_run(f"no ground-truth text cached for {chosen_id}")
+                st.stop()
+            st.caption(
+                f"Extracted live from **{len(doc_ids)} invoices**. The extraction "
+                "reads the renderer's own text rather than pixels — a "
+                "**perfect-OCR ceiling**, the same thing `--ocr-source gold` means "
+                "elsewhere. Real OCR costs ~40s a page and would make this screen "
+                "unusable; what follows it is unaffected either way."
+            )
+        else:
+            doc = pick_document(OURS, "rag_doc")
+            extraction = doc["extractions"].get("rules") or next(iter(doc["extractions"].values()))
+            document = extraction["document"]
 
         st.caption(
             f"Retrieving against {knowledge['n_entries']} past line items from "
