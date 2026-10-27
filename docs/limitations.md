@@ -198,9 +198,18 @@ limitation. What remains a limitation is everything around it:
   real text, not between home and foreign layouts.
 
   Every `rules` figure quoted elsewhere in these docs that is not explicitly
-  marked end-to-end is still a ceiling. **SROIE has no end-to-end number at
-  all** — its 0.777 is a ceiling, and the real-OCR figure for real photographs
-  is the most interesting unmeasured number left in the project.
+  marked end-to-end is still a ceiling.
+- **Our degradation profiles are harsher than real paper, and that was
+  invisible until SROIE.** Real OCR costs 34.7 points on our rendered invoices
+  and 8.2 on photographs of real receipts. The `medium` and `heavy` transforms
+  were tuned to look convincingly damaged and never checked against a
+  photograph, so every Phase 1 figure is pessimistic about real scans by an
+  unknown margin. The paired-corpus method is sound; its calibration is not
+  evidence-based.
+- **`invoice_date` collapses on real receipts under real OCR**, 0.580 → 0.032.
+  The date is printed inside a line of register codes and OCR damage puts it
+  past what glyph-folded fuzzy label matching recovers. It is the one field
+  where photographs are decisively harder than renders.
 - **FATURA2 has no line-item annotations.** Tag 10 is a single `table`
   placeholder covering the whole region, so every converted document carries
   `line_items: []`. The line-item exit criterion is verified **only on our own

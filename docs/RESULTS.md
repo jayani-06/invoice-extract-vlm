@@ -100,11 +100,43 @@ All `rules` figures are a **perfect-OCR ceiling** (`--ocr-source gold`, the
 renderer's own text). The VLM figures are **genuine end-to-end** — it read
 pixels with no OCR anywhere. The asymmetry favours the baseline.
 
-| Corpus | Real? | `rules` ceiling | `rules` end-to-end | n |
-|---|---|---|---|---|
-| `gst_in_synthetic` | no — our own renderer | **1.000** | **0.653** | 50 |
-| `fatura2` | no — third-party templates, Faker content | **0.700** | **0.645** | 50 |
-| `sroie` | **yes — photographed receipts** | **0.777** | running | 157 |
+| Corpus | Real? | `rules` ceiling | `rules` end-to-end | OCR penalty | n |
+|---|---|---|---|---|---|
+| `gst_in_synthetic` | no — our own renderer | **1.000** | **0.653** | **−34.7** | 50 |
+| `fatura2` | no — third-party templates, Faker content | **0.700** | **0.645** | −5.5 | 50 |
+| `sroie` | **yes — photographed receipts** | **0.777** | **0.695** | **−8.2** | 157 |
+
+### Real paper is gentler than our degradation profiles
+
+The right-hand column is the surprise. Real OCR costs **34.7 points** on
+invoices our own renderer produced and only **8.2** on photographs of actual
+receipts — creased, thermal-printed, shot on a phone. **Real documents lose
+four times less to real OCR than our synthetic ones do.**
+
+The per-field table shows why. On SROIE `parties.vendor.name` barely moves
+(0.834 → 0.803) and `invoice_meta.invoice_number` and `totals.subtotal`
+actually *improve* through real OCR. Our synthetic invoices depend on crisp
+label anchors — `Invoice No:` — that OCR damage destroys outright, taking the
+whole field with them. Receipts are structurally simpler and what the
+extractor leans on there survives photography.
+
+Stated plainly: **our degradation profiles are harsher than real paper.** The
+`medium` and `heavy` transforms were tuned to look convincingly damaged, and
+nobody checked that against a photograph until now. Every Phase 1 figure is
+therefore pessimistic about real scans in a way that was invisible before
+SROIE existed.
+
+**One field does collapse:** `invoice_meta.invoice_date`, 0.580 → **0.032**.
+Real receipts print the date inside a line of register codes
+(`DATE: 25/12/2018 8:13:39 PM`), and real OCR mangles it past what even
+glyph-folded fuzzy label matching can recover.
+
+Caveats on the SROIE end-to-end figure specifically: it ran with
+`gray+border+deskew` rather than `adaptive`, because the adaptive policy
+selects upscaling and that took 4.4 hours on photographs — so it is **not
+strictly comparable** with the other two end-to-end rows. 219 s a document.
+And `gstin` at 1.000 is null-vs-null, so header accuracy is the honest
+column.
 
 **Two of the three corpora are synthetic, and one of those is synthetic twice
 over.** FATURA2's layouts are genuinely designed by other people, which is the
